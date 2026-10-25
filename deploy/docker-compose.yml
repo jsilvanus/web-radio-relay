@@ -6,6 +6,7 @@ services:
     image: ghcr.io/${IMAGE_REPO:-jsilvanus}/web-radio-relay-nginx:${IMAGE_TAG:-latest}
     container_name: web-radio-relay-nginx
     restart: unless-stopped
+    mem_limit: ${NGINX_MEM_LIMIT:-512m}   # the VPS has 4 GB shared with all apps
     environment:
       STATS_API_URL: "http://api:3000"
       RELAY_API_TOKEN: "${RELAY_API_TOKEN}"
@@ -27,6 +28,7 @@ services:
       - "traefik.http.routers.web-radio-relay.entrypoints=websecure"
       - "traefik.http.routers.web-radio-relay.tls.certresolver=letsencrypt"
       - "traefik.http.services.web-radio-relay.loadbalancer.server.port=8080"
+      - "traefik.docker.network=traefik-public"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/api/health || exit 1"]
       interval: 30s
@@ -41,6 +43,7 @@ services:
     image: ghcr.io/${IMAGE_REPO:-jsilvanus}/web-radio-relay-api:${IMAGE_TAG:-latest}
     container_name: web-radio-relay-api
     restart: unless-stopped
+    mem_limit: ${API_MEM_LIMIT:-256m}
     environment:
       PORT: "3000"
       HLS_DIR: /var/www/radio/hls
