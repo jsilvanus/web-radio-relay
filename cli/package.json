@@ -1,0 +1,21 @@
+{
+  "name": "web-radio-relay-cli",
+  "version": "1.0.0",
+  "description": "Remote command-line client for the web radio relay, generated from its OpenAPI document",
+  "type": "module",
+  "bin": {
+    "web-radio-relay": "src/cli.js"
+  },
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "generate": "node scripts/generate.js",
+    "test": "node --test test/*.test.js",
+    "check": "node scripts/generate.js && git diff --exit-code src/operations.generated.js"
+  },
+  "license": "MIT"
+}

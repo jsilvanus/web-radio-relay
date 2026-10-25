@@ -1,0 +1,66 @@
+services:
+  # ---------------------------------------------------------------------------
+  # nginx-rtmp  — RTMP ingestion + HLS / archive HTTP serving
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: alfg/nginx-rtmp:latest   # nginx with nginx-rtmp-module pre-built
+    restart: unless-stopped
+    ports:
+      - "${RTMP_PORT:-1935}:1935"   # RTMP ingest  (push stream here from your fan-out project)
+      - "${HTTP_PORT:-8080}:8080"   # HTTP         (HLS stream + archive browser)
+    environment:
+      STATS_API_URL: "http://api:3000"
+      RELAY_API_TOKEN: "${RELAY_API_TOKEN:-}"
+      DELAY_MAX_SECONDS: "${DELAY_MAX_SECONDS:-60}"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./scripts:/opt/tuberadio/scripts:ro
+      - radio-hls:/var/www/radio/hls
+      - radio-archive:/var/www/radio/archive
+      - radio-logs:/var/log/nginx
+    depends_on:
+      - api
+
+  # ---------------------------------------------------------------------------
+  # api  — Node.js status & archive JSON API (proxied by nginx at /api/)
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      HLS_DIR: /var/www/radio/hls
+      ARCHIVE_DIR: /var/www/radio/archive
+      HIDDEN_ARCHIVE_DIR: /var/www/radio/hidden_archive
+      STALE_MS: "${STALE_MS:-30000}"
+      HLS_STREAM_URL: "${HLS_STREAM_URL:-/hls/stream.m3u8}"
+      ARCHIVE_URL_PREFIX: "${ARCHIVE_URL_PREFIX:-/archive}"
+      ARCHIVE_AGE_DAYS: "${ARCHIVE_AGE_DAYS:-0}"
+      HIDDEN_ARCHIVE_DELETE_DAYS: "${HIDDEN_ARCHIVE_DELETE_DAYS:-0}"
+      STATS_FILE: /var/www/radio/stats/stats.json
+      STATS_SESSION_DAYS: "${STATS_SESSION_DAYS:-90}"
+      RELAY_API_TOKEN: "${RELAY_API_TOKEN:-}"
+      DELAY_SECONDS: "${DELAY_SECONDS:-0}"
+      DELAY_MAX_SECONDS: "${DELAY_MAX_SECONDS:-60}"
+      DELAYED_STREAM_URL: "${DELAYED_STREAM_URL:-/api/hls/delayed.m3u8}"
+      CAPTION_RETENTION_SECONDS: "${CAPTION_RETENTION_SECONDS:-3600}"
+      EMAIL_PROVIDER: "${EMAIL_PROVIDER:-}"
+      EMAIL_TO: "${EMAIL_TO:-}"
+      EMAIL_FROM: "${EMAIL_FROM:-}"
+      SENDGRID_API_KEY: "${SENDGRID_API_KEY:-}"
+      MAILGUN_API_KEY: "${MAILGUN_API_KEY:-}"
+      MAILGUN_DOMAIN: "${MAILGUN_DOMAIN:-}"
+    volumes:
+      - radio-hls:/var/www/radio/hls:ro
+      - radio-archive:/var/www/radio/archive
+      - radio-hidden-archive:/var/www/radio/hidden_archive
+      - radio-stats:/var/www/radio/stats
+
+volumes:
+  radio-hls:
+  radio-archive:
+  radio-hidden-archive:
+  radio-logs:
+  radio-stats:
