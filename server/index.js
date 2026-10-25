@@ -138,6 +138,9 @@ app.use('/api/v1/', controlLimiter);
 app.use('/api/', (req, res, next) => (req.path.startsWith('/v1/') ? next() : apiLimiter(req, res, next)));
 app.use(express.json({ limit: '256kb' }));
 const requireToken = requireBearer(RELAY_API_TOKEN);
+/** Bearer token for GET /metrics (Prometheus scrape). Unset = /metrics answers 503. */
+const METRICS_BEARER_TOKEN = process.env.METRICS_BEARER_TOKEN || '';
+const requireMetricsToken = requireBearer(METRICS_BEARER_TOKEN);
 
 // ---------------------------------------------------------------------------
 // Stats helpers
@@ -458,6 +461,35 @@ function streamStatus(name) {
     lastUpdated,
   };
 }
+
+// ---------------------------------------------------------------------------
+// GET /api/health (container healthcheck) and GET /metrics (Prometheus, Bearer
+// METRICS_BEARER_TOKEN)
+// ---------------------------------------------------------------------------
+app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+app.get('/metrics', requireMetricsToken, (_req, res) => {
+  let names = [];
+  try {
+    names = fs.readdirSync(HLS_DIR, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && isValidStreamName(d.name))
+      .map((d) => d.name);
+  } catch {
+    // HLS directory not created yet
+  }
+  const lines = [
+    '# TYPE web_radio_relay_uptime_seconds gauge',
+    `web_radio_relay_uptime_seconds ${Math.round(process.uptime())}`,
+    '# TYPE web_radio_relay_stream_live gauge',
+    ...names.sort().map((n) => `web_radio_relay_stream_live{stream="${n}"} ${streamStatus(n).live ? 1 : 0}`),
+    '# TYPE web_radio_relay_live_plays_total counter',
+    `web_radio_relay_live_plays_total ${_statsCache.livePlayCount}`,
+    '# TYPE web_radio_relay_stream_sessions_total counter',
+    `web_radio_relay_stream_sessions_total ${_statsCache.streamSessions.length}`,
+    '',
+  ];
+  res.type('text/plain; version=0.0.4').send(lines.join('\n'));
+});
 
 // ---------------------------------------------------------------------------
 // GET /api/streams — every stream the relay knows about

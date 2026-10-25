@@ -1,0 +1,86 @@
+# Production compose for the church VPS (riksunsrk shared infra pattern).
+# Traefik (riksunsrk/infra) terminates TLS and routes ${DOMAIN} to nginx;
+# nothing but RTMP ingest is published on the host.
+services:
+  nginx:
+    image: ghcr.io/${IMAGE_REPO:-jsilvanus}/web-radio-relay-nginx:${IMAGE_TAG:-latest}
+    container_name: web-radio-relay-nginx
+    restart: unless-stopped
+    environment:
+      STATS_API_URL: "http://api:3000"
+      RELAY_API_TOKEN: "${RELAY_API_TOKEN}"
+      DELAY_MAX_SECONDS: "${DELAY_MAX_SECONDS:-60}"
+    ports:
+      # RTMP ingest is not HTTP, so Traefik cannot carry it. Bind to the VPS
+      # address you want publishers to reach; restrict with the host firewall.
+      - "${RTMP_BIND:-0.0.0.0}:${RTMP_PORT:-1935}:1935"
+    volumes:
+      - radio-hls:/var/www/radio/hls
+      - radio-archive:/var/www/radio/archive
+      - radio-logs:/var/log/nginx
+    depends_on:
+      api:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.web-radio-relay.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.web-radio-relay.entrypoints=websecure"
+      - "traefik.http.routers.web-radio-relay.tls.certresolver=letsencrypt"
+      - "traefik.http.services.web-radio-relay.loadbalancer.server.port=8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - default
+      - traefik-public
+
+  api:
+    image: ghcr.io/${IMAGE_REPO:-jsilvanus}/web-radio-relay-api:${IMAGE_TAG:-latest}
+    container_name: web-radio-relay-api
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      HLS_DIR: /var/www/radio/hls
+      ARCHIVE_DIR: /var/www/radio/archive
+      HIDDEN_ARCHIVE_DIR: /var/www/radio/hidden_archive
+      STATS_FILE: /var/www/radio/stats/stats.json
+      STALE_MS: "${STALE_MS:-30000}"
+      ARCHIVE_URL_PREFIX: "${ARCHIVE_URL_PREFIX:-/archive}"
+      ARCHIVE_AGE_DAYS: "${ARCHIVE_AGE_DAYS:-0}"
+      HIDDEN_ARCHIVE_DELETE_DAYS: "${HIDDEN_ARCHIVE_DELETE_DAYS:-0}"
+      STATS_SESSION_DAYS: "${STATS_SESSION_DAYS:-90}"
+      RELAY_API_TOKEN: "${RELAY_API_TOKEN}"
+      METRICS_BEARER_TOKEN: "${METRICS_BEARER_TOKEN}"
+      DELAY_SECONDS: "${DELAY_SECONDS:-0}"
+      DELAY_MAX_SECONDS: "${DELAY_MAX_SECONDS:-60}"
+      DEFAULT_STREAM: "${DEFAULT_STREAM:-stream}"
+      CAPTION_RETENTION_SECONDS: "${CAPTION_RETENTION_SECONDS:-3600}"
+    volumes:
+      - radio-hls:/var/www/radio/hls:ro
+      - radio-archive:/var/www/radio/archive
+      - radio-hidden-archive:/var/www/radio/hidden_archive
+      - radio-stats:/var/www/radio/stats
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/api/health', (r) => process.exit(r.statusCode===200?0:1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - default
+      # Prometheus (riksunsrk/infra) scrapes web-radio-relay-api:3000/metrics over this network.
+      - traefik-public
+
+volumes:
+  radio-hls:
+  radio-archive:
+  radio-hidden-archive:
+  radio-logs:
+  radio-stats:
+
+networks:
+  traefik-public:
+    external: true

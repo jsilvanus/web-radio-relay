@@ -59,6 +59,7 @@ before(async () => {
       HIDDEN_ARCHIVE_DIR: path.join(dir, 'hidden'),
       STATS_FILE: path.join(dir, 'stats.json'),
       RELAY_API_TOKEN: TOKEN,
+      METRICS_BEARER_TOKEN: 'metrics-token',
       DELAY_SECONDS: '8',
       DELAY_MAX_SECONDS: '30',
     },
@@ -216,4 +217,20 @@ test('stream names are checked before anything else', async () => {
     body: JSON.stringify({ segments: [{ lang: 'fi', text: 'x', startedAt: Date.now() }] }),
   });
   assert.equal(badPush.status, 400);
+});
+
+test('health answers without a token', async () => {
+  const res = await fetch(`${base}/api/health`);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true });
+});
+
+test('metrics need the metrics token and list stream liveness', async () => {
+  assert.equal((await fetch(`${base}/metrics`)).status, 401);
+  assert.equal((await fetch(`${base}/metrics`, { headers: { Authorization: `Bearer ${TOKEN}` } })).status, 401);
+  const res = await fetch(`${base}/metrics`, { headers: { Authorization: 'Bearer metrics-token' } });
+  assert.equal(res.status, 200);
+  const text = await res.text();
+  assert.match(text, /web_radio_relay_stream_live\{stream="stream"\} 1/);
+  assert.match(text, /web_radio_relay_uptime_seconds \d+/);
 });
