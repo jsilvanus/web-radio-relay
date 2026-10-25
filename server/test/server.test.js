@@ -161,3 +161,13 @@ test('OpenAPI document is served', async () => {
   assert.equal(doc.openapi, '3.1.0');
   assert.ok(doc.paths['/api/v1/captions']);
 });
+
+test('listener page is served and loads hls.js and the caption feed', async () => {
+  const res = await fetch(`${base}/listen`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /text\/html/);
+  const html = await res.text();
+  assert.match(html, /hls\.min\.js/);
+  assert.match(html, /\/api\/captions/);
+  assert.match(html, /\/api\/hls\/delayed\.m3u8/);
+});

@@ -4,5 +4,6 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY index.js openapi.json ./
 COPY lib ./lib
+COPY public ./public
 EXPOSE 3000
 CMD ["node", "index.js"]
