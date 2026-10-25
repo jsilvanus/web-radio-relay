@@ -25,6 +25,7 @@ Tags: `latest`, `sha-<full sha>`, and the version for `v*` tags. Pin `IMAGE_TAG`
 
 ## Church VPS notes (checked read-only 2026-10-25)
 - Traefik: entrypoints 80 (redirects) and 443, resolver `letsencrypt` (TLS challenge, so DNS must point at the VPS before the first certificate), Docker provider on `traefik-public`. It has no TCP entrypoint, so RTMP 1935 is published on the host; 1935 was free. `ufw` is installed but disabled; check for a Hetzner cloud firewall.
+- Users: `deploy` owns and deploys the infra stack (`/opt/infra`); `appdeploy` (docker group) deploys apps. The relay goes in `/opt/apps/web-radio-relay`, owned by `appdeploy`.
 - Convention: apps live in `/opt/apps/<app>/docker-compose.yml` with a `.env`, on `traefik-public` (plus `shared_multi_network` if they use Postgres or MinIO), no published ports. The relay uses neither Postgres nor MinIO, so it only joins `traefik-public`.
 - Prometheus jobs use `authorization.credentials_file: /tmp/tokens/<app>`, fed from `METRICS_TOKEN_<APP>` in infra's `secrets.enc.yaml`.
 - The VPS has 4 GB RAM shared with all apps; memory limits are set in the compose.
