@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tuberadio — Dev</title>
+    <style>
+      /* ---------------------------------------------------------------
+         Page chrome — intentionally minimal so the widget is the focus
+      --------------------------------------------------------------- */
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+      body {
+        min-height: 100vh;
+        background: #0d0d1a;
+        color: #fff;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 40px 20px 80px;
+        gap: 40px;
+      }
+
+      header {
+        text-align: center;
+      }
+      header h1 {
+        font-size: 2rem;
+        font-weight: 800;
+        letter-spacing: -.02em;
+        background: linear-gradient(135deg, #e94560, #a855f7);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+      }
+      header p {
+        margin-top: 8px;
+        color: #777;
+        font-size: .92rem;
+      }
+
+      /* ---------------------------------------------------------------
+         Two-column layout: player on the left, embed panel on the right
+      --------------------------------------------------------------- */
+      .layout {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 32px;
+        width: 100%;
+        max-width: 900px;
+        align-items: start;
+      }
+
+      @media (max-width: 640px) {
+        .layout { grid-template-columns: 1fr; }
+      }
+
+      /* ---------------------------------------------------------------
+         Embed code panel
+      --------------------------------------------------------------- */
+      .embed-panel {
+        background: #1a1a2e;
+        border-radius: 14px;
+        padding: 22px 24px;
+        box-shadow: 0 8px 32px rgba(0,0,0,.45);
+      }
+      .embed-panel h2 {
+        font-size: .85rem;
+        font-weight: 700;
+        letter-spacing: .07em;
+        text-transform: uppercase;
+        color: #aaa;
+        margin-bottom: 14px;
+      }
+
+      .code-block {
+        position: relative;
+        background: #0d0d1a;
+        border-radius: 8px;
+        padding: 14px;
+        overflow: hidden;
+      }
+      .code-block pre {
+        font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+        font-size: .73rem;
+        line-height: 1.6;
+        color: #adf0dd;
+        white-space: pre-wrap;
+        word-break: break-all;
+        max-height: 320px;
+        overflow-y: auto;
+      }
+      .code-block pre::-webkit-scrollbar { width: 4px; }
+      .code-block pre::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+      .copy-btn {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: #e94560;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        padding: 5px 12px;
+        font-size: .75rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background .2s, transform .1s;
+      }
+      .copy-btn:hover { background: #c73652; }
+      .copy-btn:active { transform: scale(.96); }
+      .copy-btn.copied { background: #22c55e; }
+
+      /* Config inputs */
+      .config-section {
+        margin-bottom: 18px;
+      }
+      .config-section label {
+        display: block;
+        font-size: .78rem;
+        color: #aaa;
+        margin-bottom: 4px;
+        font-weight: 500;
+      }
+      .config-section input {
+        width: 100%;
+        background: #0d0d1a;
+        border: 1px solid #2a2a3e;
+        border-radius: 6px;
+        color: #fff;
+        font-size: .82rem;
+        padding: 7px 10px;
+        outline: none;
+        transition: border-color .2s;
+      }
+      .config-section input:focus {
+        border-color: #e94560;
+      }
+
+      /* ---------------------------------------------------------------
+         Info section
+      --------------------------------------------------------------- */
+      .info {
+        max-width: 900px;
+        width: 100%;
+        background: #1a1a2e;
+        border-radius: 14px;
+        padding: 22px 24px;
+        box-shadow: 0 8px 32px rgba(0,0,0,.45);
+      }
+      .info h2 {
+        font-size: .85rem;
+        font-weight: 700;
+        letter-spacing: .07em;
+        text-transform: uppercase;
+        color: #aaa;
+        margin-bottom: 14px;
+      }
+      .info p {
+        font-size: .85rem;
+        color: #888;
+        line-height: 1.7;
+        margin-bottom: 10px;
+      }
+      .info p:last-child { margin-bottom: 0; }
+      .info code {
+        font-family: 'SFMono-Regular', Consolas, monospace;
+        background: #0d0d1a;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: .8em;
+        color: #adf0dd;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>📻 Tuberadio</h1>
+      <p>Audio-only web radio from an RTMP stream · Vite dev environment</p>
+    </header>
+
+    <!-- Live player widget (auto-initialised by tuberadio.js) -->
+    <div class="layout">
+      <div
+        id="player"
+        data-tuberadio
+        data-stream-url="/hls/stream.m3u8"
+        data-status-url="/api/status"
+        data-archive-url="/api/archive"
+        data-title="Tuberadio"
+      ></div>
+
+      <!-- Embed code panel -->
+      <div class="embed-panel">
+        <h2>Embed this player</h2>
+
+        <div class="config-section">
+          <label for="cfg-title">Station title</label>
+          <input id="cfg-title" type="text" value="My Radio" placeholder="My Radio" />
+        </div>
+        <div class="config-section">
+          <label for="cfg-stream">Stream URL</label>
+          <input id="cfg-stream" type="text" value="/hls/stream.m3u8" placeholder="/hls/stream.m3u8" />
+        </div>
+        <div class="config-section">
+          <label for="cfg-status">Status API URL</label>
+          <input id="cfg-status" type="text" value="/api/status" placeholder="/api/status" />
+        </div>
+        <div class="config-section">
+          <label for="cfg-archive">Archive API URL</label>
+          <input id="cfg-archive" type="text" value="/api/archive" placeholder="/api/archive" />
+        </div>
+        <div class="config-section">
+          <label for="cfg-script">Script URL</label>
+          <input id="cfg-script" type="text" value="https://your-domain.com/tuberadio.js" placeholder="https://your-domain.com/tuberadio.js" />
+        </div>
+
+        <div class="code-block">
+          <pre id="embed-code"></pre>
+          <button class="copy-btn" id="copy-btn">Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Architecture notes -->
+    <div class="info">
+      <h2>How it works</h2>
+      <p>
+        <strong>Ingest:</strong> A fan-out project pushes the YouTube stream to
+        <code>rtmp://your-server:1935/live/stream</code>.
+        Nginx RTMP receives it and calls <code>on-publish.sh</code>.
+      </p>
+      <p>
+        <strong>Processing (FFmpeg):</strong> FFmpeg strips the video track and produces two outputs
+        simultaneously — a rolling HLS audio playlist at <code>/hls/stream.m3u8</code> (4-second
+        segments, 10-segment window) and a timestamped full-session MP3 archive under
+        <code>/archive/</code>.
+      </p>
+      <p>
+        <strong>Serving:</strong> Nginx HTTP (port 8080) serves the HLS segments and archives with
+        CORS headers.  A tiny Node.js process on port 3000 provides the
+        <code>/api/status</code> and <code>/api/archive</code> JSON endpoints the widget polls.
+      </p>
+      <p>
+        <strong>Widget:</strong> <code>tuberadio.js</code> is a self-contained vanilla JS file with
+        zero production dependencies.  It auto-initialises any element with
+        <code>data-tuberadio</code>, polls for stream status, streams via HLS (native or HLS.js),
+        and shows a downloadable archive list.
+      </p>
+    </div>
+
+    <!-- Load the widget script (from the frontend/ directory, proxied by Vite) -->
+    <script src="/tuberadio.js"></script>
+    <!-- Dev site logic -->
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
