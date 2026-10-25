@@ -20,7 +20,9 @@ fs.mkdirSync(hls);
 let child;
 
 /** Write a live playlist whose last segment ended now. */
-function writeLive(count = 12, seconds = 4) {
+function writeLive(count = 12, seconds = 4, name = 'stream') {
+  const dirPath = path.join(hls, name);
+  fs.mkdirSync(dirPath, { recursive: true });
   const end = Date.now();
   const lines = ['#EXTM3U', '#EXT-X-VERSION:3', `#EXT-X-TARGETDURATION:${seconds}`, `#EXT-X-MEDIA-SEQUENCE:${200}`];
   for (let i = 0; i < count; i++) {
@@ -28,9 +30,9 @@ function writeLive(count = 12, seconds = 4) {
     lines.push(`#EXT-X-PROGRAM-DATE-TIME:${new Date(start).toISOString()}`);
     lines.push(`#EXTINF:${seconds.toFixed(3)},`);
     lines.push(`seg${String(200 + i).padStart(5, '0')}.ts`);
-    fs.writeFileSync(path.join(hls, `seg${String(200 + i).padStart(5, '0')}.ts`), 'x');
+    fs.writeFileSync(path.join(dirPath, `seg${String(200 + i).padStart(5, '0')}.ts`), 'x');
   }
-  fs.writeFileSync(path.join(hls, 'stream.m3u8'), lines.join('\n') + '\n');
+  fs.writeFileSync(path.join(dirPath, 'stream.m3u8'), lines.join('\n') + '\n');
 }
 
 async function waitForServer() {
@@ -74,8 +76,9 @@ test('status reports the delay and points listeners at the delayed playlist', as
   const body = await (await fetch(`${base}/api/status`)).json();
   assert.equal(body.live, true);
   assert.equal(body.delaySeconds, 8);
-  assert.equal(body.streamUrl, '/api/hls/delayed.m3u8');
-  assert.equal(body.liveStreamUrl, '/hls/stream.m3u8');
+  assert.equal(body.name, 'stream');
+  assert.equal(body.streamUrl, '/api/streams/stream/hls/delayed.m3u8');
+  assert.equal(body.liveStreamUrl, '/hls/stream/stream.m3u8');
 });
 
 test('delayed playlist lists segments that ended at least 8 s ago', async () => {
@@ -87,7 +90,7 @@ test('delayed playlist lists segments that ended at least 8 s ago', async () => 
   assert.equal(segs.length, 6);
   // Last live segment ends at "now"; the newest listed one must end before now - 8 s
   const last = segs[segs.length - 1];
-  assert.match(last, /\/hls\/seg\d{5}\.ts$/);
+  assert.match(last, /\/hls\/stream\/seg\d{5}\.ts$/);
   const pdts = text.split('\n').filter((l) => l.startsWith('#EXT-X-PROGRAM-DATE-TIME:')).map((l) => Date.parse(l.slice(25)));
   const lastEnd = pdts[pdts.length - 1] + 4000;
   assert.ok(lastEnd <= Date.now() - 8000 + 50, 'playlist must not contain segments inside the delay');
@@ -105,7 +108,10 @@ test('control routes refuse missing or wrong tokens', async () => {
 test('PUT /api/v1/delay changes the delay within the configured maximum', async () => {
   const ok = await fetch(`${base}/api/v1/delay`, { method: 'PUT', headers: auth, body: JSON.stringify({ delaySeconds: 12 }) });
   assert.equal(ok.status, 200);
-  assert.deepEqual(await ok.json(), { delaySeconds: 12, maxSeconds: 30 });
+  const body = await ok.json();
+  assert.equal(body.delaySeconds, 12);
+  assert.equal(body.maxSeconds, 30);
+  assert.equal(body.stream, 'stream');
   const high = await fetch(`${base}/api/v1/delay`, { method: 'PUT', headers: auth, body: JSON.stringify({ delaySeconds: 31 }) });
   assert.equal(high.status, 400);
   const status = await (await fetch(`${base}/api/status`)).json();
@@ -126,11 +132,12 @@ test('captions: pushed captions are released only after the delay', async () => 
     }),
   });
   assert.equal(sent.status, 202);
-  assert.deepEqual(await sent.json(), { accepted: 3 });
+  assert.deepEqual(await sent.json(), { stream: 'stream', accepted: 3 });
 
   const list = await (await fetch(`${base}/api/captions?lang=fi&from=${now - 30_000}`)).json();
   assert.equal(list.delaySeconds, 12);
   assert.deepEqual(list.captions.map((c) => c.text), ['Vanha lause']);
+  assert.equal(list.stream, 'stream');
   assert.equal(list.captions[0].lang, 'fi');
   assert.ok(typeof list.next === 'number');
 });
@@ -168,6 +175,45 @@ test('listener page is served and loads hls.js and the caption feed', async () =
   assert.match(res.headers.get('content-type'), /text\/html/);
   const html = await res.text();
   assert.match(html, /hls\.min\.js/);
-  assert.match(html, /\/api\/captions/);
-  assert.match(html, /\/api\/hls\/delayed\.m3u8/);
+  assert.match(html, /\/captions\?limit=200/);
+  assert.match(html, /\/api\/streams\//);
+});
+
+test('two streams keep their own delay and captions', async () => {
+  writeLive(12, 4, 'messu');
+  const put = await fetch(`${base}/api/v1/streams/messu/delay`, {
+    method: 'PUT', headers: auth, body: JSON.stringify({ delaySeconds: 0 }),
+  });
+  assert.equal(put.status, 200);
+  const now = Date.now();
+  const sent = await fetch(`${base}/api/v1/streams/messu/captions`, {
+    method: 'POST', headers: auth,
+    body: JSON.stringify({ segments: [{ lang: 'fi', text: 'Messu alkaa', startedAt: now - 2_000 }] }),
+  });
+  assert.equal(sent.status, 202);
+
+  const messu = await (await fetch(`${base}/api/streams/messu/captions?from=${now - 60_000}`)).json();
+  assert.deepEqual(messu.captions.map((c) => c.text), ['Messu alkaa']);
+  assert.equal(messu.delaySeconds, 0);
+
+  const main = await (await fetch(`${base}/api/captions?from=${now - 60_000}`)).json();
+  assert.equal(main.captions.some((c) => c.text === 'Messu alkaa'), false, 'messu captions stay on messu');
+  assert.equal(main.delaySeconds, 12);
+
+  const list = await (await fetch(`${base}/api/streams`)).json();
+  const names = list.streams.map((x) => x.name);
+  assert.ok(names.includes('messu') && names.includes('stream'));
+
+  const playlist = await (await fetch(`${base}/api/streams/messu/hls/delayed.m3u8`)).text();
+  assert.ok(playlist.includes('/hls/messu/seg'));
+});
+
+test('stream names are checked before anything else', async () => {
+  const bad = await fetch(`${base}/api/streams/..%2Fetc/status`);
+  assert.equal(bad.status, 400);
+  const badPush = await fetch(`${base}/api/v1/streams/BAD_NAME/captions`, {
+    method: 'POST', headers: auth,
+    body: JSON.stringify({ segments: [{ lang: 'fi', text: 'x', startedAt: Date.now() }] }),
+  });
+  assert.equal(badPush.status, 400);
 });

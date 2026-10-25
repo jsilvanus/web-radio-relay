@@ -4,7 +4,7 @@ export const operations = [
     "operationId": "getStatus",
     "method": "GET",
     "path": "/api/status",
-    "summary": "Whether the stream is live, and the delay",
+    "summary": "[default stream] Whether the stream is live, and the delay",
     "bearer": false,
     "body": null,
     "parameters": []
@@ -40,7 +40,7 @@ export const operations = [
     "operationId": "getDelayedPlaylist",
     "method": "GET",
     "path": "/api/hls/delayed.m3u8",
-    "summary": "Live audio playlist, delayed by the relay",
+    "summary": "[default stream] Live audio playlist, delayed by the relay",
     "bearer": false,
     "body": null,
     "parameters": []
@@ -49,7 +49,7 @@ export const operations = [
     "operationId": "listCaptions",
     "method": "GET",
     "path": "/api/captions",
-    "summary": "Captions that are due for listeners now",
+    "summary": "[default stream] Captions that are due for listeners now",
     "bearer": false,
     "body": null,
     "parameters": [
@@ -83,7 +83,7 @@ export const operations = [
     "operationId": "publishCaptions",
     "method": "POST",
     "path": "/api/v1/captions",
-    "summary": "Push timed captions (and translations) for the stream",
+    "summary": "[default stream] Push timed captions (and translations) for the stream",
     "bearer": true,
     "body": "application/json",
     "parameters": []
@@ -92,7 +92,7 @@ export const operations = [
     "operationId": "getDelay",
     "method": "GET",
     "path": "/api/v1/delay",
-    "summary": "Read the listener delay",
+    "summary": "[default stream] Read the listener delay",
     "bearer": true,
     "body": null,
     "parameters": []
@@ -101,7 +101,7 @@ export const operations = [
     "operationId": "setDelay",
     "method": "PUT",
     "path": "/api/v1/delay",
-    "summary": "Set the listener delay (applies to audio and captions)",
+    "summary": "[default stream] Set the listener delay (applies to audio and captions)",
     "bearer": true,
     "body": "application/json",
     "parameters": []
@@ -114,5 +114,119 @@ export const operations = [
     "bearer": true,
     "body": "application/json",
     "parameters": []
+  },
+  {
+    "operationId": "listStreams",
+    "method": "GET",
+    "path": "/api/streams",
+    "summary": "Every stream the relay knows, with live state and delay",
+    "bearer": false,
+    "body": null,
+    "parameters": []
+  },
+  {
+    "operationId": "getStreamStatus",
+    "method": "GET",
+    "path": "/api/streams/{name}/status",
+    "summary": "Live state and delay of one stream",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "getStreamDelayedPlaylist",
+    "method": "GET",
+    "path": "/api/streams/{name}/hls/delayed.m3u8",
+    "summary": "Live audio playlist of one stream, delayed by the relay",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "listStreamCaptions",
+    "method": "GET",
+    "path": "/api/streams/{name}/captions",
+    "summary": "Captions of one stream that are due now",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "lang",
+        "in": "query",
+        "required": false
+      },
+      {
+        "name": "from",
+        "in": "query",
+        "required": false
+      },
+      {
+        "name": "limit",
+        "in": "query",
+        "required": false
+      }
+    ]
+  },
+  {
+    "operationId": "publishStreamCaptions",
+    "method": "POST",
+    "path": "/api/v1/streams/{name}/captions",
+    "summary": "Push timed captions for one stream",
+    "bearer": true,
+    "body": "application/json",
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "getStreamDelay",
+    "method": "GET",
+    "path": "/api/v1/streams/{name}/delay",
+    "summary": "Read the delay of one stream",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "setStreamDelay",
+    "method": "PUT",
+    "path": "/api/v1/streams/{name}/delay",
+    "summary": "Set the delay of one stream",
+    "bearer": true,
+    "body": "application/json",
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
   }
 ];

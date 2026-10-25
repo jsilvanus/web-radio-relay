@@ -109,7 +109,6 @@ Open `.env` in your editor. The most important values for a public deployment:
 
 ```dotenv
 # The public URL of your server (used in widget embed code and API responses)
-HLS_STREAM_URL=https://radio.example.com/hls/stream.m3u8
 ARCHIVE_URL_PREFIX=https://radio.example.com/archive
 
 # Change host ports if 1935 or 8080 are already in use on your host
@@ -452,12 +451,11 @@ Copy `.env.example` to `.env` and override only what you need.
 | `HLS_DIR` | `/var/www/radio/hls` | Directory containing the HLS manifest and segments |
 | `ARCHIVE_DIR` | `/var/www/radio/archive` | Directory containing archived MP3 files |
 | `STALE_MS` | `30000` | Milliseconds after the last manifest update before the stream is considered off-air |
-| `HLS_STREAM_URL` | `/hls/stream.m3u8` | Public URL returned in `GET /api/status` — set to your full public URL when behind a reverse proxy |
 | `ARCHIVE_URL_PREFIX` | `/archive` | URL prefix for archive download links in `GET /api/archive` — set to your full public URL when behind a reverse proxy |
 | `RELAY_API_TOKEN` | *(unset)* | Bearer token for the control API (`/api/v1/*`). Unset means those routes answer 503 (fail closed). Generate with `openssl rand -hex 32` |
 | `DELAY_SECONDS` | `0` | Listener delay for audio and captions. Changeable at runtime with `PUT /api/v1/delay` |
 | `DELAY_MAX_SECONDS` | `60` | Upper bound for the delay (see `HLS_LIST_SIZE` above) |
-| `DELAYED_STREAM_URL` | `/api/hls/delayed.m3u8` | Playlist URL reported as `streamUrl` in `GET /api/status` |
+| `DEFAULT_STREAM` | `stream` | Stream used by the legacy routes without a name (`/api/status`, `/api/captions`) |
 | `HLS_SEGMENT_PREFIX` | `/hls/` | URL prefix of segment files named in the delayed playlist (nginx serves `/hls/`) |
 | `CAPTION_RETENTION_SECONDS` | `3600` | How long captions stay in memory |
 
@@ -481,6 +479,21 @@ The API is served at `/api/` (port 8080, proxied by nginx) and is also directly 
 A machine-readable description is at `GET /api/openapi.json` (OpenAPI 3.1, source: `server/openapi.json`).
 Public routes serve listeners and the widget. Routes under `/api/v1/` are control routes and need
 `Authorization: Bearer <RELAY_API_TOKEN>`.
+
+### Several streams
+
+Every RTMP stream key is a stream: `rtmp://<host>:1935/live/<key>` (the key is 1 to 32 characters of a-z, 0-9, `_` and `-`). Each stream has its own audio playlist, captions and listener delay.
+
+| Method and path | Purpose |
+|---|---|
+| `GET /api/streams` | Every stream, with live state and delay |
+| `GET /api/streams/{name}/status` | Live state and delay of one stream |
+| `GET /api/streams/{name}/hls/delayed.m3u8` | Delayed audio playlist of one stream |
+| `GET /api/streams/{name}/captions?lang=fi&from=` | Captions of one stream that are due now |
+| `POST /api/v1/streams/{name}/captions` | Push captions for one stream (Bearer) |
+| `GET`/`PUT /api/v1/streams/{name}/delay` | Read or set one stream's delay (Bearer) |
+
+Routes without a name (`/api/status`, `/api/captions`, `/api/hls/delayed.m3u8`, `/api/v1/captions`, `/api/v1/delay`) serve the stream named by `DEFAULT_STREAM`. They are deprecated in the OpenAPI document. The listener page takes a stream: `/listen?stream=messu`.
 
 ### Listener delay and sync
 

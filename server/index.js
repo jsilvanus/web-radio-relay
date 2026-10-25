@@ -22,14 +22,13 @@
  *   RELAY_API_TOKEN          Bearer token for /api/v1 (unset = control API answers 503)
  *   DELAY_SECONDS            Listener delay for audio and captions     (default: 0)
  *   DELAY_MAX_SECONDS        Largest delay the API accepts; sizes the ffmpeg playlist (default: 60)
- *   DELAYED_STREAM_URL       Public URL of the delayed playlist        (default: /api/hls/delayed.m3u8)
  *   HLS_SEGMENT_PREFIX       URL prefix of segment files in playlists  (default: /hls/)
  *   CAPTION_RETENTION_SECONDS  How long captions stay in memory        (default: 3600)
  *   HLS_DIR                  Directory containing stream.m3u8           (default: /var/www/radio/hls)
  *   ARCHIVE_DIR              Directory containing archived MP3s         (default: /var/www/radio/archive)
  *   HIDDEN_ARCHIVE_DIR       Directory for hidden (aged-out) archives   (default: /var/www/radio/hidden_archive)
  *   STALE_MS                 ms after which a manifest is stale         (default: 30000)
- *   HLS_STREAM_URL           Public URL returned in /api/status         (default: /hls/stream.m3u8)
+ *   DEFAULT_STREAM           Stream used by the legacy routes without a name (default: stream)
  *   ARCHIVE_URL_PREFIX       URL prefix for archive MP3 links           (default: /archive)
  *   ARCHIVE_AGE_DAYS         Move recordings to hidden archive after N days (0 = disabled, default: 0)
  *   HIDDEN_ARCHIVE_DELETE_DAYS  Delete from hidden archive after N days (0 = disabled, default: 0)
@@ -51,7 +50,8 @@ import https from 'https';
 import { fileURLToPath } from 'url';
 import { requireBearer } from './lib/auth.js';
 import { buildDelayedPlaylist } from './lib/hls-delay.js';
-import { CaptionBuffer, validateCaptionBody } from './lib/captions.js';
+import { validateCaptionBody } from './lib/captions.js';
+import { isValidStreamName, StreamRegistry } from './lib/streams.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -63,7 +63,6 @@ const HIDDEN_ARCHIVE_DIR = process.env.HIDDEN_ARCHIVE_DIR || '/var/www/radio/hid
 /** If the HLS manifest hasn't been updated in this many ms, the stream is stale */
 const STALE_MS = Number(process.env.STALE_MS) || 30_000;
 /** Public URL for the HLS stream — returned in the /api/status payload */
-const HLS_STREAM_URL = process.env.HLS_STREAM_URL || '/hls/stream.m3u8';
 /** URL prefix used to build archive download links returned by /api/archive */
 const ARCHIVE_URL_PREFIX = (process.env.ARCHIVE_URL_PREFIX || '/archive').replace(/\/$/, '');
 /** Move MP3s older than this many days from ARCHIVE_DIR to HIDDEN_ARCHIVE_DIR; 0 = disabled */
@@ -78,16 +77,21 @@ const STATS_SESSION_DAYS = Number(process.env.STATS_SESSION_DAYS) || 90;
 /** Bearer token for the control API (/api/v1). Unset = control routes answer 503. */
 const RELAY_API_TOKEN = process.env.RELAY_API_TOKEN || '';
 
-/** Listener delay in seconds for audio and captions; changeable through PUT /api/v1/delay */
+/** Stream used by the legacy routes (/api/status, /api/captions, /api/hls/...) */
+const DEFAULT_STREAM = process.env.DEFAULT_STREAM || 'stream';
+/** Largest listener delay the API accepts; also sizes the ffmpeg playlist (on-publish.sh) */
 const DELAY_MAX_SECONDS = Math.max(0, Number(process.env.DELAY_MAX_SECONDS ?? 60));
-let delaySeconds = Math.min(DELAY_MAX_SECONDS, Math.max(0, Number(process.env.DELAY_SECONDS ?? 0)));
-/** Public URL listeners should load; the live playlist stays at HLS_STREAM_URL */
-const DELAYED_STREAM_URL = process.env.DELAYED_STREAM_URL || '/api/hls/delayed.m3u8';
-/** URL prefix of the segment files named in the delayed playlist (nginx serves them) */
+/** Initial listener delay for every stream; changed per stream through the control API */
+const INITIAL_DELAY_SECONDS = Math.min(DELAY_MAX_SECONDS, Math.max(0, Number(process.env.DELAY_SECONDS ?? 0)));
+/** URL prefix of segment files in playlists; segments live in <prefix><stream>/ */
 const HLS_SEGMENT_PREFIX = process.env.HLS_SEGMENT_PREFIX || '/hls/';
 /** How long captions are kept in memory */
 const CAPTION_RETENTION_SECONDS = Math.max(60, Number(process.env.CAPTION_RETENTION_SECONDS ?? 3600));
-const captions = new CaptionBuffer();
+/** Delay and captions for every stream, keyed by stream name */
+const streams = new StreamRegistry({
+  defaultDelaySeconds: INITIAL_DELAY_SECONDS,
+  maxDelaySeconds: DELAY_MAX_SECONDS,
+});
 
 /** Email provider: 'sendgrid' | 'mailgun' | '' (disabled) */
 const EMAIL_PROVIDER = (process.env.EMAIL_PROVIDER || '').toLowerCase();
@@ -425,46 +429,74 @@ function _initEmailScheduler() {
 // ---------------------------------------------------------------------------
 // GET /api/status
 // ---------------------------------------------------------------------------
-app.get('/api/status', (_req, res) => {
-  const manifestPath = path.join(HLS_DIR, 'stream.m3u8');
+/** Resolve the stream named in the path, or the default stream for legacy routes. */
+function streamFromRequest(req, res, next) {
+  const name = req.params.name ?? DEFAULT_STREAM;
+  if (!isValidStreamName(name)) return res.status(400).json({ error: 'invalid stream name' });
+  req.stream = name;
+  next();
+}
 
+/** Status of one stream: live state from its manifest, and its delay. */
+function streamStatus(name) {
   let live = false;
   let lastUpdated = null;
-
   try {
-    const stat = fs.statSync(manifestPath);
-    const ageMs = Date.now() - stat.mtimeMs;
-    live = ageMs < STALE_MS;
+    const stat = fs.statSync(path.join(HLS_DIR, name, 'stream.m3u8'));
+    live = Date.now() - stat.mtimeMs < STALE_MS;
     lastUpdated = stat.mtime.toISOString();
   } catch {
-    // manifest doesn't exist yet → stream is not live
+    // no manifest yet: the stream is not live
   }
-
-  res.json({
+  return {
+    name,
     live,
     // What listeners should play: the delayed playlist, so audio and captions line up
-    streamUrl: DELAYED_STREAM_URL,
-    liveStreamUrl: HLS_STREAM_URL,
-    delaySeconds,
+    streamUrl: `/api/streams/${name}/hls/delayed.m3u8`,
+    liveStreamUrl: `${HLS_SEGMENT_PREFIX}${name}/stream.m3u8`,
+    delaySeconds: streams.delayOf(name),
     lastUpdated,
-  });
+  };
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/streams — every stream the relay knows about
+// ---------------------------------------------------------------------------
+app.get('/api/streams', (_req, res) => {
+  let names = [];
+  try {
+    names = fs.readdirSync(HLS_DIR, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && isValidStreamName(d.name))
+      .map((d) => d.name);
+  } catch {
+    // HLS directory not created yet
+  }
+  for (const name of streams.entries.keys()) if (!names.includes(name)) names.push(name);
+  res.json({ streams: names.sort().map(streamStatus) });
 });
 
 // ---------------------------------------------------------------------------
-// GET /api/hls/delayed.m3u8 — the live audio playlist, delayed server side
+// GET /api/streams/:name/status and GET /api/status (default stream)
 // ---------------------------------------------------------------------------
-app.get('/api/hls/delayed.m3u8', (_req, res) => {
+app.get(['/api/streams/:name/status', '/api/status'], streamFromRequest, (req, res) => {
+  res.json(streamStatus(req.stream));
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/streams/:name/hls/delayed.m3u8 and the default stream's alias
+// ---------------------------------------------------------------------------
+app.get(['/api/streams/:name/hls/delayed.m3u8', '/api/hls/delayed.m3u8'], streamFromRequest, (req, res) => {
   let source;
   try {
-    source = fs.readFileSync(path.join(HLS_DIR, 'stream.m3u8'), 'utf8');
+    source = fs.readFileSync(path.join(HLS_DIR, req.stream, 'stream.m3u8'), 'utf8');
   } catch {
     res.status(404).type('text/plain').send('Stream is not live\n');
     return;
   }
   const body = buildDelayedPlaylist(source, {
-    delaySeconds,
+    delaySeconds: streams.delayOf(req.stream),
     nowMs: Date.now(),
-    segmentPrefix: HLS_SEGMENT_PREFIX,
+    segmentPrefix: `${HLS_SEGMENT_PREFIX}${req.stream}/`,
   });
   if (body === null) {
     res.status(503).type('text/plain').send('Stream timing is not available (ffmpeg needs program_date_time)\n');
@@ -475,9 +507,9 @@ app.get('/api/hls/delayed.m3u8', (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// GET /api/captions — captions that are due for listeners now
+// GET /api/streams/:name/captions and GET /api/captions — captions due now
 // ---------------------------------------------------------------------------
-app.get('/api/captions', (req, res) => {
+app.get(['/api/streams/:name/captions', '/api/captions'], streamFromRequest, (req, res) => {
   const nowMs = Date.now();
   const from = req.query.from === undefined ? undefined : Number(req.query.from);
   if (from !== undefined && !Number.isInteger(from)) {
@@ -485,15 +517,13 @@ app.get('/api/captions', (req, res) => {
   }
   const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 200));
   const lang = typeof req.query.lang === 'string' ? req.query.lang.toLowerCase() : undefined;
-  const { captions: due, next } = captions.released({
-    nowMs,
-    delayMs: delaySeconds * 1000,
-    from,
-    lang,
-    limit,
-  });
+  const delaySeconds = streams.delayOf(req.stream);
+  const entry = streams.peek(req.stream);
+  const { captions: due, next } = entry
+    ? entry.captions.released({ nowMs, delayMs: delaySeconds * 1000, from, lang, limit })
+    : { captions: [], next: from ?? nowMs - delaySeconds * 1000 - 30_000 };
   res.set('Cache-Control', 'no-cache');
-  res.json({ serverTime: nowMs, delaySeconds, next, captions: due });
+  res.json({ stream: req.stream, serverTime: nowMs, delaySeconds, next, captions: due });
 });
 
 // ---------------------------------------------------------------------------
@@ -512,28 +542,33 @@ app.get('/listen', (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Control API (Bearer RELAY_API_TOKEN)
+// Control API (Bearer RELAY_API_TOKEN). Each route exists per stream and,
+// without a name, for the default stream.
 // ---------------------------------------------------------------------------
-app.post('/api/v1/captions', requireToken, (req, res) => {
+app.post(['/api/v1/streams/:name/captions', '/api/v1/captions'], requireToken, streamFromRequest, (req, res) => {
   const nowMs = Date.now();
   const checked = validateCaptionBody(req.body, nowMs);
   if (!checked.ok) return res.status(400).json({ error: checked.error });
-  const accepted = captions.add(checked.segments);
-  captions.prune(nowMs - (delaySeconds * 1000 + CAPTION_RETENTION_SECONDS * 1000));
-  res.status(202).json({ accepted });
+  const entry = streams.ensure(req.stream);
+  if (!entry) return res.status(409).json({ error: 'too many streams' });
+  const accepted = entry.captions.add(checked.segments);
+  entry.captions.prune(nowMs - (entry.delaySeconds * 1000 + CAPTION_RETENTION_SECONDS * 1000));
+  res.status(202).json({ stream: req.stream, accepted });
 });
 
-app.get('/api/v1/delay', requireToken, (_req, res) => {
-  res.json({ delaySeconds, maxSeconds: DELAY_MAX_SECONDS });
+app.get(['/api/v1/streams/:name/delay', '/api/v1/delay'], requireToken, streamFromRequest, (req, res) => {
+  res.json({ stream: req.stream, delaySeconds: streams.delayOf(req.stream), maxSeconds: DELAY_MAX_SECONDS });
 });
 
-app.put('/api/v1/delay', requireToken, (req, res) => {
+app.put(['/api/v1/streams/:name/delay', '/api/v1/delay'], requireToken, streamFromRequest, (req, res) => {
   const value = req.body && req.body.delaySeconds;
   if (!Number.isInteger(value) || value < 0 || value > DELAY_MAX_SECONDS) {
     return res.status(400).json({ error: `delaySeconds must be an integer 0-${DELAY_MAX_SECONDS}` });
   }
-  delaySeconds = value;
-  res.json({ delaySeconds, maxSeconds: DELAY_MAX_SECONDS });
+  const entry = streams.ensure(req.stream);
+  if (!entry) return res.status(409).json({ error: 'too many streams' });
+  entry.delaySeconds = value;
+  res.json({ stream: req.stream, delaySeconds: value, maxSeconds: DELAY_MAX_SECONDS });
 });
 
 // ---------------------------------------------------------------------------
@@ -713,15 +748,14 @@ app.listen(PORT, () => {
   console.log(`  HLS_DIR                    : ${HLS_DIR}`);
   console.log(`  ARCHIVE_DIR                : ${ARCHIVE_DIR}`);
   console.log(`  HIDDEN_ARCHIVE_DIR         : ${HIDDEN_ARCHIVE_DIR}`);
-  console.log(`  HLS_STREAM_URL             : ${HLS_STREAM_URL}`);
+  console.log(`  DEFAULT_STREAM             : ${DEFAULT_STREAM}`);
   console.log(`  ARCHIVE_URL_PREFIX         : ${ARCHIVE_URL_PREFIX}`);
   console.log(`  ARCHIVE_AGE_DAYS           : ${ARCHIVE_AGE_DAYS || 'disabled'}`);
   console.log(`  HIDDEN_ARCHIVE_DELETE_DAYS : ${HIDDEN_ARCHIVE_DELETE_DAYS || 'disabled'}`);
   console.log(`  STATS_FILE                 : ${STATS_FILE}`);
   console.log(`  STATS_SESSION_DAYS         : ${STATS_SESSION_DAYS}`);
   console.log(`  RELAY_API_TOKEN            : ${RELAY_API_TOKEN ? '(set)' : '(unset: control API answers 503)'}`);
-  console.log(`  DELAY_SECONDS              : ${delaySeconds} (max ${DELAY_MAX_SECONDS})`);
-  console.log(`  DELAYED_STREAM_URL         : ${DELAYED_STREAM_URL}`);
+  console.log(`  DELAY_SECONDS              : ${INITIAL_DELAY_SECONDS} initial (max ${DELAY_MAX_SECONDS})`);
   console.log(`  CAPTION_RETENTION_SECONDS  : ${CAPTION_RETENTION_SECONDS}`);
   console.log(`  EMAIL_PROVIDER             : ${EMAIL_PROVIDER || 'disabled'}`);
   if (EMAIL_PROVIDER) {
