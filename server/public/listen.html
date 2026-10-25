@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="fi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Radio</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --fg: #1d1d1b; --muted: #6b6b66; --accent: #1f6feb; --line: #d9d9d4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #161615; --fg: #efefea; --muted: #9a9a94; --accent: #6aa7ff; --line: #33332f; }
+  }
+  :root[data-theme="dark"] { --bg: #161615; --fg: #efefea; --muted: #9a9a94; --accent: #6aa7ff; --line: #33332f; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--fg);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 16px; display: flex; flex-direction: column; gap: 16px; max-width: 720px; margin-inline: auto;
+  }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+  h1 { font-size: 1.25rem; margin: 0; }
+  .status { color: var(--muted); font-size: 0.9rem; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  button, select {
+    font: inherit; color: inherit; background: transparent; border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 14px; min-height: 44px;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: 0.5; }
+  audio { width: 100%; }
+  #captions {
+    flex: 1; min-height: 240px; border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
+  }
+  .caption { margin: 0; font-size: 1.15rem; }
+  .caption small { display: block; color: var(--muted); font-size: 0.8rem; }
+  .empty { color: var(--muted); margin: auto; text-align: center; }
+  @media (max-width: 420px) { .caption { font-size: 1.05rem; } }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Radio</h1>
+  <span class="status" id="status" aria-live="polite">Ei yhteyttä</span>
+</header>
+
+<div class="controls">
+  <button class="primary" id="play" type="button">Kuuntele</button>
+  <label>Kieli
+    <select id="lang">
+      <option value="fi">suomi</option>
+      <option value="sv">svenska</option>
+      <option value="en">English</option>
+      <option value="">kaikki</option>
+    </select>
+  </label>
+</div>
+
+<audio id="audio" controls preload="none"></audio>
+
+<section id="captions" aria-live="polite" aria-label="Tekstitykset">
+  <p class="empty" id="empty">Tekstitykset näkyvät tässä, kun lähetys on käynnissä.</p>
+</section>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.13/hls.min.js" crossorigin="anonymous"></script>
+<script>
+(function () {
+  'use strict';
+
+  // Relay endpoints; the page sits next to the API, so relative paths work.
+  var STREAM_URL = '/api/hls/delayed.m3u8';
+  var STATUS_URL = '/api/status';
+  var CAPTIONS_URL = '/api/captions';
+  var POLL_MS = 1000;
+  var MAX_LINES = 200;
+
+  var audio = document.getElementById('audio');
+  var playButton = document.getElementById('play');
+  var langSelect = document.getElementById('lang');
+  var statusEl = document.getElementById('status');
+  var captionsEl = document.getElementById('captions');
+  var emptyEl = document.getElementById('empty');
+
+  var hls = null;
+  var pollTimer = null;
+  var cursor = null;          // the relay's `next`, passed back as ?from=
+  var pollToken = 0;          // changes on language switch, so stale replies are dropped
+  var retryTimer = null;
+
+  // Language from the URL (?lang=sv) wins over the default.
+  var params = new URLSearchParams(location.search);
+  var initialLang = params.get('lang');
+  if (initialLang !== null) {
+    for (var i = 0; i < langSelect.options.length; i++) {
+      if (langSelect.options[i].value === initialLang) langSelect.selectedIndex = i;
+    }
+  }
+
+  function setStatus(text) { statusEl.textContent = text; }
+
+  function startStream() {
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    if (window.Hls && Hls.isSupported()) {
+      if (hls) hls.destroy();
+      hls = new Hls({ lowLatencyMode: false });
+      hls.loadSource(STREAM_URL);
+      hls.attachMedia(audio);
+      hls.on(Hls.Events.ERROR, function (_e, data) {
+        if (!data.fatal) return;
+        setStatus('Yhteys katkesi, yritetään uudelleen');
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+        else scheduleRetry();
+      });
+    } else {
+      // Safari plays HLS natively.
+      audio.src = STREAM_URL;
+    }
+    audio.play().catch(function () { setStatus('Paina Toista, selain esti äänen'); });
+  }
+
+  function scheduleRetry() {
+    if (retryTimer) return;
+    retryTimer = setTimeout(startStream, 3000);
+  }
+
+  playButton.addEventListener('click', function () {
+    playButton.disabled = true;
+    startStream();
+    startPolling();
+    setStatus('Kuuntelet');
+  });
+
+  audio.addEventListener('error', function () {
+    if (!hls && playButton.disabled) scheduleRetry();
+  });
+
+  // Live status: title and whether the stream is on air.
+  function refreshStatus() {
+    fetch(STATUS_URL, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (s.live === false) setStatus('Lähetys ei ole käynnissä');
+        else if (playButton.disabled) setStatus('Kuuntelet · viive ' + s.delaySeconds + ' s');
+      })
+      .catch(function () { setStatus('Ei yhteyttä palvelimeen'); });
+  }
+
+  function startPolling() {
+    if (pollTimer) return;
+    refreshStatus();
+    pollTimer = setInterval(poll, POLL_MS);
+    poll();
+  }
+
+  function poll() {
+    var token = pollToken;
+    var url = CAPTIONS_URL + '?limit=200';
+    if (langSelect.value) url += '&lang=' + encodeURIComponent(langSelect.value);
+    if (cursor !== null) url += '&from=' + cursor;
+    fetch(url, { cache: 'no-store' })
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (body) {
+        if (token !== pollToken) return; // language changed while in flight
+        cursor = body.next;
+        body.captions.forEach(addCaption);
+      })
+      .catch(function () { /* the next poll retries; status shows outages */ });
+  }
+
+  // Captions are released by the relay at the same delayed moment as the audio,
+  // so each one is shown as soon as it arrives.
+  function addCaption(c) {
+    if (emptyEl) { emptyEl.remove(); emptyEl = null; }
+    var p = document.createElement('p');
+    p.className = 'caption';
+    p.textContent = c.text;
+    var meta = document.createElement('small');
+    meta.textContent = c.lang.toUpperCase();
+    p.appendChild(meta);
+    captionsEl.appendChild(p);
+    while (captionsEl.children.length > MAX_LINES) captionsEl.removeChild(captionsEl.firstChild);
+    captionsEl.scrollTop = captionsEl.scrollHeight;
+  }
+
+  langSelect.addEventListener('change', function () {
+    pollToken++;
+    cursor = null;
+    // Show only the language asked for; earlier lines in another language stay as they were.
+    poll();
+  });
+})();
+</script>
+</body>
+</html>

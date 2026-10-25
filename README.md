@@ -566,6 +566,10 @@ constant time and is never accepted in the URL.
 
 **Rate limits:** public routes 60 requests per minute per IP; `/api/v1` 600 per minute per IP.
 
+### Listener page (`/listen`)
+
+`GET /listen` serves a page with the delayed audio, a play button, a language choice (fi, sv, en or all) and captions shown as the relay releases them. The page is one HTML file (`server/public/listen.html`) that loads hls.js from cdnjs. Safari plays the HLS stream natively. Open it with `?lang=sv` to start in Swedish.
+
 ### Remote CLI
 
 `cli/` is a zero-dependency command-line client generated from `server/openapi.json`:

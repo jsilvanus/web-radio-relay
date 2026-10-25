@@ -9,6 +9,7 @@
  *   GET  /api/hls/delayed.m3u8       live audio playlist, delayed server side
  *   GET  /api/captions               captions released for listeners (?lang=&from=&limit=)
  *   GET  /api/openapi.json           the OpenAPI document of this API
+ *   GET  /listen                     listener page: audio plus captions
  *
  * Control (Bearer RELAY_API_TOKEN, see docs/API.md):
  *   POST /api/v1/captions            sender pushes timed captions (and later translations)
@@ -500,6 +501,14 @@ app.get('/api/captions', (req, res) => {
 // ---------------------------------------------------------------------------
 app.get('/api/openapi.json', (_req, res) => {
   res.sendFile(path.join(__dirname, 'openapi.json'));
+});
+
+// ---------------------------------------------------------------------------
+// GET /listen — the listener page: delayed audio plus captions in one view
+// ---------------------------------------------------------------------------
+app.get('/listen', (_req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('html').sendFile(path.join(__dirname, 'public', 'listen.html'));
 });
 
 // ---------------------------------------------------------------------------
