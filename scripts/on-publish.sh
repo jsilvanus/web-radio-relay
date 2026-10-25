@@ -8,7 +8,7 @@
 # What it does:
 #   1. Creates the HLS output dir and the archive dir if they don't exist.
 #   2. Runs FFmpeg with two outputs:
-#        a) HLS audio-only stream  →  $HLS_DIR/stream.m3u8  (live, rolling)
+#        a) HLS audio-only stream  →  $HLS_DIR/<stream>/stream.m3u8  (live, rolling)
 #        b) Full MP3 archive file  →  $ARCHIVE_DIR/<timestamp>_<name>.mp3
 #
 # Environment variables (with defaults):
@@ -23,6 +23,18 @@
 set -euo pipefail
 
 STREAM_NAME="${1:-stream}"
+
+# The stream key becomes a directory name, so it must be a short safe name.
+case "$STREAM_NAME" in
+  ''|-*|*[!a-z0-9_-]*)
+    echo "on-publish: invalid stream name '${STREAM_NAME}' (use a-z, 0-9, _ and -)" >&2
+    exit 1
+    ;;
+esac
+if [ "${#STREAM_NAME}" -gt 32 ]; then
+  echo "on-publish: stream name longer than 32 characters" >&2
+  exit 1
+fi
 
 HLS_DIR="${HLS_DIR:-/var/www/radio/hls}"
 ARCHIVE_DIR="${ARCHIVE_DIR:-/var/www/radio/archive}"
@@ -46,9 +58,10 @@ RTMP_INPUT="rtmp://127.0.0.1/live/${STREAM_NAME}"
 ARCHIVE_TIMESTAMP="$(date +"%Y-%m-%d_%H-%M-%S")"
 ARCHIVE_FILE="${ARCHIVE_DIR}/${ARCHIVE_TIMESTAMP}_${STREAM_NAME}.mp3"
 
-# HLS output files
-HLS_MANIFEST="${HLS_DIR}/stream.m3u8"
-HLS_SEGMENTS="${HLS_DIR}/seg%05d.ts"
+# HLS output: one directory per stream, so several streams can run at once
+STREAM_HLS_DIR="${HLS_DIR}/${STREAM_NAME}"
+HLS_MANIFEST="${STREAM_HLS_DIR}/stream.m3u8"
+HLS_SEGMENTS="${STREAM_HLS_DIR}/seg%05d.ts"
 
 LOG_FILE="${LOG_DIR}/ffmpeg_${ARCHIVE_TIMESTAMP}.log"
 
@@ -56,7 +69,7 @@ STATS_API_URL="${STATS_API_URL:-http://127.0.0.1:3000}"
 RELAY_API_TOKEN="${RELAY_API_TOKEN:-}"
 
 # Create directories
-mkdir -p "$HLS_DIR" "$ARCHIVE_DIR" "$LOG_DIR"
+mkdir -p "$STREAM_HLS_DIR" "$ARCHIVE_DIR" "$LOG_DIR"
 
 echo "[$(date -Iseconds)] Starting stream '${STREAM_NAME}'" >> "$LOG_FILE"
 echo "  RTMP input : $RTMP_INPUT"   >> "$LOG_FILE"

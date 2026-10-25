@@ -35,7 +35,6 @@ services:
       ARCHIVE_DIR: /var/www/radio/archive
       HIDDEN_ARCHIVE_DIR: /var/www/radio/hidden_archive
       STALE_MS: "${STALE_MS:-30000}"
-      HLS_STREAM_URL: "${HLS_STREAM_URL:-/hls/stream.m3u8}"
       ARCHIVE_URL_PREFIX: "${ARCHIVE_URL_PREFIX:-/archive}"
       ARCHIVE_AGE_DAYS: "${ARCHIVE_AGE_DAYS:-0}"
       HIDDEN_ARCHIVE_DELETE_DAYS: "${HIDDEN_ARCHIVE_DELETE_DAYS:-0}"
@@ -44,7 +43,7 @@ services:
       RELAY_API_TOKEN: "${RELAY_API_TOKEN:-}"
       DELAY_SECONDS: "${DELAY_SECONDS:-0}"
       DELAY_MAX_SECONDS: "${DELAY_MAX_SECONDS:-60}"
-      DELAYED_STREAM_URL: "${DELAYED_STREAM_URL:-/api/hls/delayed.m3u8}"
+      DEFAULT_STREAM: "${DEFAULT_STREAM:-stream}"
       CAPTION_RETENTION_SECONDS: "${CAPTION_RETENTION_SECONDS:-3600}"
       EMAIL_PROVIDER: "${EMAIL_PROVIDER:-}"
       EMAIL_TO: "${EMAIL_TO:-}"

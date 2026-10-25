@@ -47,6 +47,9 @@
 
 <div class="controls">
   <button class="primary" id="play" type="button">Kuuntele</button>
+  <label>Lähetys
+    <select id="stream" aria-label="Lähetys"></select>
+  </label>
   <label>Kieli
     <select id="lang">
       <option value="fi">suomi</option>
@@ -68,43 +71,74 @@
 (function () {
   'use strict';
 
-  // Relay endpoints; the page sits next to the API, so relative paths work.
-  var STREAM_URL = '/api/hls/delayed.m3u8';
-  var STATUS_URL = '/api/status';
-  var CAPTIONS_URL = '/api/captions';
+  // Streams live under /api/streams/<name>; the page sits next to the API.
   var POLL_MS = 1000;
   var MAX_LINES = 200;
 
   var audio = document.getElementById('audio');
   var playButton = document.getElementById('play');
+  var streamSelect = document.getElementById('stream');
   var langSelect = document.getElementById('lang');
   var statusEl = document.getElementById('status');
+  var titleEl = document.getElementById('title');
   var captionsEl = document.getElementById('captions');
   var emptyEl = document.getElementById('empty');
 
   var hls = null;
   var pollTimer = null;
   var cursor = null;          // the relay's `next`, passed back as ?from=
-  var pollToken = 0;          // changes on language switch, so stale replies are dropped
+  var pollToken = 0;          // changes on switching stream or language, so stale replies are dropped
   var retryTimer = null;
+  var playing = false;
 
-  // Language from the URL (?lang=sv) wins over the default.
+  // ?stream=messu and ?lang=sv pick the start values.
   var params = new URLSearchParams(location.search);
+  var initialStream = params.get('stream');
   var initialLang = params.get('lang');
-  if (initialLang !== null) {
-    for (var i = 0; i < langSelect.options.length; i++) {
-      if (langSelect.options[i].value === initialLang) langSelect.selectedIndex = i;
+  if (initialLang !== null) selectValue(langSelect, initialLang);
+
+  function selectValue(select, value) {
+    for (var i = 0; i < select.options.length; i++) {
+      if (select.options[i].value === value) select.selectedIndex = i;
     }
+  }
+
+  function streamBase() {
+    return '/api/streams/' + encodeURIComponent(streamSelect.value);
   }
 
   function setStatus(text) { statusEl.textContent = text; }
 
+  function loadStreams() {
+    fetch('/api/streams', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        streamSelect.innerHTML = '';
+        body.streams.forEach(function (s) {
+          var o = document.createElement('option');
+          o.value = s.name;
+          o.textContent = s.name + (s.live ? '' : ' (ei lähetystä)');
+          streamSelect.appendChild(o);
+        });
+        if (initialStream) selectValue(streamSelect, initialStream);
+        if (!streamSelect.options.length) {
+          var none = document.createElement('option');
+          none.value = 'stream';
+          none.textContent = 'stream';
+          streamSelect.appendChild(none);
+        }
+        titleEl.textContent = streamSelect.value || 'Radio';
+      })
+      .catch(function () { setStatus('Ei yhteyttä palvelimeen'); });
+  }
+
   function startStream() {
     if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    var url = streamBase() + '/hls/delayed.m3u8';
     if (window.Hls && Hls.isSupported()) {
       if (hls) hls.destroy();
       hls = new Hls({ lowLatencyMode: false });
-      hls.loadSource(STREAM_URL);
+      hls.loadSource(url);
       hls.attachMedia(audio);
       hls.on(Hls.Events.ERROR, function (_e, data) {
         if (!data.fatal) return;
@@ -114,7 +148,7 @@
       });
     } else {
       // Safari plays HLS natively.
-      audio.src = STREAM_URL;
+      audio.src = url;
     }
     audio.play().catch(function () { setStatus('Paina Toista, selain esti äänen'); });
   }
@@ -124,7 +158,14 @@
     retryTimer = setTimeout(startStream, 3000);
   }
 
+  function stopStream() {
+    if (hls) { hls.destroy(); hls = null; }
+    audio.removeAttribute('src');
+    audio.load();
+  }
+
   playButton.addEventListener('click', function () {
+    playing = true;
     playButton.disabled = true;
     startStream();
     startPolling();
@@ -132,16 +173,30 @@
   });
 
   audio.addEventListener('error', function () {
-    if (!hls && playButton.disabled) scheduleRetry();
+    if (playing && !hls) scheduleRetry();
   });
 
-  // Live status: title and whether the stream is on air.
+  // Switching stream: stop the old audio, clear the captions, start again.
+  streamSelect.addEventListener('change', function () {
+    titleEl.textContent = streamSelect.value;
+    pollToken++;
+    cursor = null;
+    clearCaptions();
+    if (playing) {
+      stopStream();
+      startStream();
+      poll();
+    }
+    refreshStatus();
+  });
+
+  // Live status of the chosen stream: whether it is on air, and its delay.
   function refreshStatus() {
-    fetch(STATUS_URL, { cache: 'no-store' })
+    fetch(streamBase() + '/status', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (s) {
         if (s.live === false) setStatus('Lähetys ei ole käynnissä');
-        else if (playButton.disabled) setStatus('Kuuntelet · viive ' + s.delaySeconds + ' s');
+        else if (playing) setStatus('Kuuntelet · viive ' + s.delaySeconds + ' s');
       })
       .catch(function () { setStatus('Ei yhteyttä palvelimeen'); });
   }
@@ -155,7 +210,7 @@
 
   function poll() {
     var token = pollToken;
-    var url = CAPTIONS_URL + '?limit=200';
+    var url = streamBase() + '/captions?limit=200';
     if (langSelect.value) url += '&lang=' + encodeURIComponent(langSelect.value);
     if (cursor !== null) url += '&from=' + cursor;
     fetch(url, { cache: 'no-store' })
@@ -164,11 +219,19 @@
         return r.json();
       })
       .then(function (body) {
-        if (token !== pollToken) return; // language changed while in flight
+        if (token !== pollToken) return; // stream or language changed while in flight
         cursor = body.next;
         body.captions.forEach(addCaption);
       })
       .catch(function () { /* the next poll retries; status shows outages */ });
+  }
+
+  function clearCaptions() {
+    captionsEl.innerHTML = '';
+    emptyEl = document.createElement('p');
+    emptyEl.className = 'empty';
+    emptyEl.textContent = 'Tekstitykset näkyvät tässä, kun lähetys on käynnissä.';
+    captionsEl.appendChild(emptyEl);
   }
 
   // Captions are released by the relay at the same delayed moment as the audio,
@@ -189,9 +252,10 @@
   langSelect.addEventListener('change', function () {
     pollToken++;
     cursor = null;
-    // Show only the language asked for; earlier lines in another language stay as they were.
     poll();
   });
+
+  loadStreams();
 })();
 </script>
 </body>
