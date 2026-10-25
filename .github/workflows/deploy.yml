@@ -1,0 +1,120 @@
+name: Deploy to church VPS
+
+# Runs after "Publish images" succeeds on main, or by hand with an image tag.
+# The `production` environment gates it behind its required reviewers.
+# Copies deploy/docker-compose.yml to the VPS, writes .env from the settings
+# below, pulls the images and starts the stack as `appdeploy`.
+#
+# Environment secrets (Settings > Environments > production):
+#   SSH_PRIVATE_KEY, VM_HOST, VM_USER (appdeploy)
+#   RELAY_API_TOKEN, METRICS_BEARER_TOKEN
+#   GHCR_TOKEN   (optional: classic PAT with read:packages, only if the packages are private)
+# Environment variables:
+#   DEPLOY_PATH  (/opt/apps/web-radio-relay), DOMAIN
+#   VM_SSH_PORT (optional, 22), RTMP_BIND (optional), RTMP_PORT (optional),
+#   DELAY_SECONDS, DELAY_MAX_SECONDS (optional)
+
+on:
+  workflow_run:
+    workflows: ['Publish images']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to deploy (e.g. sha-<40 hex>, v1.2.3 or latest)'
+        required: true
+        default: latest
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+    env:
+      IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.image_tag || format('sha-{0}', github.event.workflow_run.head_sha) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Copy compose file
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ vars.VM_SSH_PORT || 22 }}
+          source: deploy/docker-compose.yml
+          target: ${{ vars.DEPLOY_PATH }}
+          strip_components: 1
+
+      - name: Deploy
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          APP_IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          APP_DOMAIN: ${{ vars.DOMAIN }}
+          APP_RTMP_BIND: ${{ vars.RTMP_BIND }}
+          APP_RTMP_PORT: ${{ vars.RTMP_PORT }}
+          APP_DELAY_SECONDS: ${{ vars.DELAY_SECONDS }}
+          APP_DELAY_MAX_SECONDS: ${{ vars.DELAY_MAX_SECONDS }}
+          APP_RELAY_API_TOKEN: ${{ secrets.RELAY_API_TOKEN }}
+          APP_METRICS_BEARER_TOKEN: ${{ secrets.METRICS_BEARER_TOKEN }}
+          APP_GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ vars.VM_SSH_PORT || 22 }}
+          envs: APP_IMAGE_TAG,APP_DOMAIN,APP_RTMP_BIND,APP_RTMP_PORT,APP_DELAY_SECONDS,APP_DELAY_MAX_SECONDS,APP_RELAY_API_TOKEN,APP_METRICS_BEARER_TOKEN,APP_GHCR_TOKEN
+          script: |
+            set -euo pipefail
+            cd "${{ vars.DEPLOY_PATH }}"
+
+            # Write .env without echoing secrets. Empty optional values are left out
+            # so the compose defaults apply.
+            {
+              printf 'DOMAIN=%s\n'               "${APP_DOMAIN}"
+              printf 'IMAGE_TAG=%s\n'            "${APP_IMAGE_TAG}"
+              printf 'RELAY_API_TOKEN=%s\n'      "${APP_RELAY_API_TOKEN}"
+              printf 'METRICS_BEARER_TOKEN=%s\n' "${APP_METRICS_BEARER_TOKEN}"
+              [ -n "${APP_RTMP_BIND}" ]        && printf 'RTMP_BIND=%s\n'         "${APP_RTMP_BIND}"
+              [ -n "${APP_RTMP_PORT}" ]        && printf 'RTMP_PORT=%s\n'         "${APP_RTMP_PORT}"
+              [ -n "${APP_DELAY_SECONDS}" ]    && printf 'DELAY_SECONDS=%s\n'     "${APP_DELAY_SECONDS}"
+              [ -n "${APP_DELAY_MAX_SECONDS}" ] && printf 'DELAY_MAX_SECONDS=%s\n' "${APP_DELAY_MAX_SECONDS}"
+              true
+            } > .env
+            chmod 600 .env
+
+            if [ -n "${APP_GHCR_TOKEN}" ]; then
+              printf '%s' "${APP_GHCR_TOKEN}" | docker login ghcr.io -u jsilvanus --password-stdin
+            fi
+            docker compose pull
+            if [ -n "${APP_GHCR_TOKEN}" ]; then docker logout ghcr.io; fi
+
+            docker compose up -d --remove-orphans
+
+            echo "Waiting for both containers to become healthy..."
+            for c in web-radio-relay-api web-radio-relay-nginx; do
+              OK=false
+              for i in $(seq 1 18); do
+                STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$c" 2>/dev/null || echo missing)
+                echo "  $c attempt ${i}/18: ${STATUS}"
+                if [ "${STATUS}" = healthy ]; then OK=true; break; fi
+                sleep 5
+              done
+              if [ "${OK}" != true ]; then
+                echo "FAIL: $c never became healthy"
+                docker compose ps
+                docker compose logs --tail 80
+                exit 1
+              fi
+            done
+            echo "Deployed ${APP_IMAGE_TAG}"
