@@ -1,11 +1,11 @@
 name: Deploy to church VPS
 
 # Runs after "Publish images" succeeds on main, or by hand with an image tag.
-# The `production` environment gates it behind its required reviewers.
+# The `production-riihimaki` environment gates it behind its required reviewers.
 # Copies deploy/docker-compose.yml to the VPS, writes .env from the settings
 # below, pulls the images and starts the stack as `appdeploy`.
 #
-# Environment secrets (Settings > Environments > production):
+# Environment secrets (Settings > Environments > production-riihimaki):
 #   SSH_PRIVATE_KEY, VM_HOST, VM_USER (appdeploy)
 #   RELAY_API_TOKEN, METRICS_BEARER_TOKEN
 #   GHCR_TOKEN   (optional: classic PAT with read:packages, only if the packages are private)
@@ -35,7 +35,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: production
+    environment: production-riihimaki
     permissions:
       contents: read
     env:

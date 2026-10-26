@@ -20,7 +20,7 @@ Tags: `latest`, `sha-<full sha>`, and the version for `v*` tags. Pin `IMAGE_TAG`
 1. DNS name for `DOMAIN`, and the firewall rule for RTMP 1935 (restrict to the publishers' addresses).
 2. Secrets: `RELAY_API_TOKEN`, `METRICS_BEARER_TOKEN` (generate with `openssl rand -hex 32`), kept in the deploy side's secrets, never in this repo.
 3. Prometheus: add a job in `riksunsrk/infra` `observability/prometheus/prometheus.yml` (target `web-radio-relay-api:3000`, path `/metrics`, bearer token file) plus `METRICS_TOKEN_WEB_RADIO_RELAY` in infra secrets.
-4. Deploy workflow: `.github/workflows/deploy.yml` (runs after the image build on main, or by hand with an image tag; gated by the `production` environment). It needs these in the `production` environment:
+4. Deploy workflow: `.github/workflows/deploy.yml` (runs after the image build on main, or by hand with an image tag; gated by the `production-riihimaki` environment). It needs these in the `production-riihimaki` environment:
    - Secrets: `SSH_PRIVATE_KEY`, `VM_HOST`, `VM_USER` (`appdeploy`), `RELAY_API_TOKEN`, `METRICS_BEARER_TOKEN`, and `GHCR_TOKEN` only if the packages are private.
    - Variables: `DEPLOY_PATH` (`/opt/apps/web-radio-relay`, created and owned by `appdeploy`), `DOMAIN`; optional `VM_SSH_PORT`, `RTMP_BIND`, `RTMP_PORT`, `DELAY_SECONDS`, `DELAY_MAX_SECONDS`.
 5. `/metrics` is internal only: nginx proxies just `/api/` and `/listen`, so it is not reachable through Traefik.
