@@ -52,6 +52,7 @@ import { requireBearer } from './lib/auth.js';
 import { buildDelayedPlaylist } from './lib/hls-delay.js';
 import { validateCaptionBody } from './lib/captions.js';
 import { isValidStreamName, StreamRegistry } from './lib/streams.js';
+import { StreamSupervisor } from './lib/stream-supervisor.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -91,6 +92,12 @@ const CAPTION_RETENTION_SECONDS = Math.max(60, Number(process.env.CAPTION_RETENT
 const streams = new StreamRegistry({
   defaultDelaySeconds: INITIAL_DELAY_SECONDS,
   maxDelaySeconds: DELAY_MAX_SECONDS,
+});
+const supervisor = new StreamSupervisor({
+  hlsDir: HLS_DIR, archiveDir: ARCHIVE_DIR,
+  logDir: process.env.LOG_DIR || '/var/log/tuberadio',
+  sourceTemplate: process.env.RADIO_SOURCE_URL_TEMPLATE || '', staleMs: STALE_MS,
+  onSession: (name, event, timestamp) => { if (event === 'start') recordSessionStart(name, timestamp); else recordSessionEnd(name, timestamp); }
 });
 
 /** Email provider: 'sendgrid' | 'mailgun' | '' (disabled) */
@@ -492,6 +499,24 @@ app.get('/metrics', requireMetricsToken, (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Authenticated managed stream lifecycle. Source URLs are deployment config only.
+// ---------------------------------------------------------------------------
+app.post('/api/v1/streams/:name/start', requireToken, streamFromRequest, async (req, res) => {
+  try { res.status(202).json({ stream: await supervisor.start(req.stream) }); }
+  catch (err) { res.status(err.statusCode || 503).json({ error: err.message || 'unable to start stream' }); }
+});
+app.post('/api/v1/streams/:name/stop', requireToken, streamFromRequest, async (req, res) => {
+  try { res.json({ stream: await supervisor.stop(req.stream) }); }
+  catch (err) { res.status(err.statusCode || 503).json({ error: err.message || 'unable to stop stream' }); }
+});
+app.get('/api/v1/streams/:name/lifecycle', requireToken, streamFromRequest, (_req, res) => {
+  res.json({ stream: supervisor.state(_req.stream) });
+});
+app.get('/api/v1/streams/lifecycle', requireToken, (_req, res) => {
+  res.json({ streams: supervisor.list() });
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/streams — every stream the relay knows about
 // ---------------------------------------------------------------------------
 app.get('/api/streams', (_req, res) => {
@@ -504,6 +529,7 @@ app.get('/api/streams', (_req, res) => {
     // HLS directory not created yet
   }
   for (const name of streams.entries.keys()) if (!names.includes(name)) names.push(name);
+  for (const item of supervisor.list()) if (!names.includes(item.name)) names.push(item.name);
   res.json({ streams: names.sort().map(streamStatus) });
 });
 
@@ -773,7 +799,7 @@ function runArchiveMaintenance() {
 // ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   _loadStats();
 
   console.log(`Tuberadio API server listening on port ${PORT}`);
@@ -802,3 +828,6 @@ app.listen(PORT, () => {
 
   _initEmailScheduler();
 });
+
+process.once('SIGTERM', () => { void supervisor.close().finally(() => server.close()); });
+process.once('SIGINT', () => { void supervisor.close().finally(() => server.close()); });
