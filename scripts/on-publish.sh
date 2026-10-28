@@ -18,6 +18,7 @@
 #   AUDIO_BITRATE  Audio bitrate for both outputs           (128k)
 #   HLS_TIME     HLS segment duration in seconds           (4)
 #   HLS_LIST_SIZE  Number of segments kept in playlist     (10)
+#   AUDIO_INPUT_URL  Explicit audio source URL (defaults to local RTMP ingest)
 # =============================================================================
 
 set -euo pipefail
@@ -52,7 +53,7 @@ if [ "$HLS_LIST_SIZE" -lt "$MIN_LIST_SIZE" ]; then
   HLS_LIST_SIZE="$MIN_LIST_SIZE"
 fi
 
-RTMP_INPUT="rtmp://127.0.0.1/live/${STREAM_NAME}"
+AUDIO_INPUT_URL="${AUDIO_INPUT_URL:-rtmp://127.0.0.1/live/${STREAM_NAME}}"
 
 # Timestamp used for the archive filename — formatted for lexicographic sorting
 ARCHIVE_TIMESTAMP="$(date +"%Y-%m-%d_%H-%M-%S")"
@@ -72,7 +73,7 @@ RELAY_API_TOKEN="${RELAY_API_TOKEN:-}"
 mkdir -p "$STREAM_HLS_DIR" "$ARCHIVE_DIR" "$LOG_DIR"
 
 echo "[$(date -Iseconds)] Starting stream '${STREAM_NAME}'" >> "$LOG_FILE"
-echo "  RTMP input : $RTMP_INPUT"   >> "$LOG_FILE"
+echo "  Audio input: $AUDIO_INPUT_URL" >> "$LOG_FILE"
 echo "  HLS output : $HLS_MANIFEST" >> "$LOG_FILE"
 echo "  Archive    : $ARCHIVE_FILE" >> "$LOG_FILE"
 
@@ -122,7 +123,7 @@ fi
 
 exec ffmpeg \
     -loglevel warning \
-    -i "$RTMP_INPUT" \
+    -i "$AUDIO_INPUT_URL" \
     \
     -vn \
     -c:a aac \
