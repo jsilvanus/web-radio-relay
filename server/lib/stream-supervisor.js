@@ -38,6 +38,7 @@ export class StreamSupervisor {
     e.state = 'starting'; e.lastTransitionAt = new Date().toISOString();
     fs.mkdirSync(path.join(this.hlsDir,e.name), { recursive:true }); fs.mkdirSync(this.archiveDir,{recursive:true}); fs.mkdirSync(this.logDir,{recursive:true});
     const source = this.sourceTemplate.replaceAll('{name}', e.name);
+    try { fs.unlinkSync(path.join(this.hlsDir, e.name, 'stream.m3u8')); } catch {}
     const stamp = new Date().toISOString().replace(/[:.]/g,'-');
     const archive = path.join(this.archiveDir, `${stamp}_${e.name}.mp3`);
     const log = fs.createWriteStream(path.join(this.logDir,`ffmpeg_${stamp}_${e.name}.log`), { flags:'a' });
@@ -68,7 +69,7 @@ export class StreamSupervisor {
     e.desiredState='stopped'; e.state='stopping'; e.lastTransitionAt=new Date().toISOString(); e.generation++;
     if(e.retryTimer) clearTimeout(e.retryTimer); e.retryTimer=null;
     const child=e.child;
-    e.stopping=(async()=>{ child.kill('SIGTERM'); await new Promise((resolve)=>{ let done=false; const finish=()=>{if(done)return;done=true;clearTimeout(timer);resolve();}; child.once('close',finish); const timer=setTimeout(()=>{if(child.exitCode===null && child.signalCode===null)child.kill('SIGKILL'); finish();},this.stopGraceMs); timer.unref?.(); }); e.child=null;e.state='stopped';e.lastTransitionAt=new Date().toISOString();e.stopping=null; return this.state(name); })();
+    e.stopping=(async()=>{ child.kill('SIGTERM'); await new Promise((resolve)=>{ let done=false; const finish=()=>{if(done)return;done=true;clearTimeout(timer);resolve();}; child.once('close',finish); const timer=setTimeout(()=>{if(child.exitCode===null && child.signalCode===null)child.kill('SIGKILL'); finish();},this.stopGraceMs); timer.unref?.(); }); e.child=null;e.state='stopped';e.lastTransitionAt=new Date().toISOString();this.onSession(e.name,'end',e.lastTransitionAt);e.stopping=null; return this.state(name); })();
     return e.stopping;
   }
   async close() { this.closing=true; await Promise.all([...this.entries.keys()].map((n)=>this.stop(n))); }
