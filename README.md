@@ -431,6 +431,19 @@ npm run build
 
 ---
 
+## Managed stream lifecycle API
+
+The API container owns FFmpeg for streams started through the authenticated lifecycle API. Configure `RELAY_API_TOKEN` and `RADIO_SOURCE_URL_TEMPLATE` in `.env`; the template uses `{name}`, for example `rtsp://mediamtx:8554/{name}`. The source URL is deployment configuration and is never accepted in request bodies.
+
+- `POST /api/v1/streams/{name}/start`
+- `POST /api/v1/streams/{name}/stop`
+- `GET /api/v1/streams/{name}/lifecycle`
+- `GET /api/v1/streams/lifecycle`
+
+Send `Authorization: Bearer <RELAY_API_TOKEN>`. Start and stop are idempotent. Lifecycle state includes desired and observed state, PID, restart count, HLS freshness and a sanitized error. The supervisor retries failed sources with bounded backoff and stops managed children during API shutdown.
+
+Legacy RTMP publisher callbacks remain supported separately. Do not publish and API-manage the same stream name at once: both paths can otherwise attempt to write the same HLS/archive outputs. The RTSP pull lifecycle is configured independently of RTMP ingest.
+
 ## Environment variables
 
 All variables have sensible defaults so the system works out of the box.
