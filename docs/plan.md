@@ -40,6 +40,10 @@ PiGateway uses `PIGATEWAY_RADIO_RELAY_API_URL` and `PIGATEWAY_RADIO_RELAY_API_TO
 
 ## Implemented
 
+- Authenticated managed lifecycle API for start, stop and lifecycle state, backed by an FFmpeg supervisor with bounded retries and shutdown cleanup.
+- Docker API image includes FFmpeg; managed lifecycle HLS, archive and log directories are writable/shared.
+- OpenAPI lifecycle paths and initial supervisor unit tests added.
+
 - Configurable FFmpeg input URL through `AUDIO_INPUT_URL`, retaining the legacy per-stream RTMP default.
 - Single FFmpeg invocation writes HLS and a timestamped MP3 archive.
 - Multi-stream state, per-stream caption buffers and listener delay.
@@ -47,7 +51,7 @@ PiGateway uses `PIGATEWAY_RADIO_RELAY_API_URL` and `PIGATEWAY_RADIO_RELAY_API_TO
 
 ## Remaining work / acceptance
 
-1. Implement the lifecycle supervisor and authenticated API routes above; wire source configuration, process termination, archive finalization and restart policy.
+1. Run lifecycle and full API tests; verify process exit races and archive closure with real FFmpeg.
 2. Integrate the supervisor with Docker Compose and bare-metal deployment. Install FFmpeg in the process-owning runtime and ensure it has only the required HLS/archive/log volume access.
 3. Preserve legacy RTMP ingest without allowing duplicate FFmpeg processes; document migration and rollback.
 4. Add tests for auth, invalid names, idempotency, concurrent start/stop, failed spawn, stale HLS, source loss/retry, graceful stop/archive closure, shutdown and token-not-configured behavior.
