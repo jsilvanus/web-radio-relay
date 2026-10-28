@@ -35,7 +35,6 @@ services:
       ARCHIVE_DIR: /var/www/radio/archive
       HIDDEN_ARCHIVE_DIR: /var/www/radio/hidden_archive
       LOG_DIR: /var/log/tuberadio
-      RADIO_SOURCE_URL_TEMPLATE: "${RADIO_SOURCE_URL_TEMPLATE:-}"
       STALE_MS: "${STALE_MS:-30000}"
       ARCHIVE_URL_PREFIX: "${ARCHIVE_URL_PREFIX:-/archive}"
       ARCHIVE_AGE_DAYS: "${ARCHIVE_AGE_DAYS:-0}"
@@ -43,8 +42,6 @@ services:
       STATS_FILE: /var/www/radio/stats/stats.json
       STATS_SESSION_DAYS: "${STATS_SESSION_DAYS:-90}"
       RELAY_API_TOKEN: "${RELAY_API_TOKEN:-}"
-      RADIO_SOURCE_URL_TEMPLATE: "${RADIO_SOURCE_URL_TEMPLATE:-}"
-      LOG_DIR: /var/log/tuberadio
       DELAY_SECONDS: "${DELAY_SECONDS:-0}"
       DELAY_MAX_SECONDS: "${DELAY_MAX_SECONDS:-60}"
       DEFAULT_STREAM: "${DEFAULT_STREAM:-stream}"
