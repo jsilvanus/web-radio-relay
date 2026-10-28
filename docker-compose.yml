@@ -35,6 +35,7 @@ services:
       ARCHIVE_DIR: /var/www/radio/archive
       HIDDEN_ARCHIVE_DIR: /var/www/radio/hidden_archive
       LOG_DIR: /var/log/tuberadio
+      RADIO_SOURCE_URL_TEMPLATE: "${RADIO_SOURCE_URL_TEMPLATE:-}"
       STALE_MS: "${STALE_MS:-30000}"
       ARCHIVE_URL_PREFIX: "${ARCHIVE_URL_PREFIX:-/archive}"
       ARCHIVE_AGE_DAYS: "${ARCHIVE_AGE_DAYS:-0}"
