@@ -13,6 +13,7 @@
  *
  * Control (Bearer RELAY_API_TOKEN, see docs/API.md):
  *   POST /api/v1/captions            sender pushes timed captions (and later translations)
+ *   GET  /api/v1/captions/source     status of the pigateway caption pull (GATEWAY_EVENTS_URL)
  *   GET  /api/v1/delay               read the listener delay
  *   PUT  /api/v1/delay               set the listener delay (0 .. DELAY_MAX_SECONDS)
  *   POST /api/v1/stats/session       stream session start/end (shell scripts)
@@ -24,6 +25,9 @@
  *   DELAY_MAX_SECONDS        Largest delay the API accepts; sizes the ffmpeg playlist (default: 60)
  *   HLS_SEGMENT_PREFIX       URL prefix of segment files in playlists  (default: /hls/)
  *   CAPTION_RETENTION_SECONDS  How long captions stay in memory        (default: 3600)
+ *   GATEWAY_EVENTS_URL       Base URL of pigateway; captions are pulled from its SSE bus (default: unset / disabled)
+ *   GATEWAY_TOKEN            Bearer token for the gateway                (default: unset)
+ *   GATEWAY_CAPTION_STREAM   Stream that receives the gateway captions   (default: DEFAULT_STREAM)
  *   HLS_DIR                  Directory containing stream.m3u8           (default: /var/www/radio/hls)
  *   ARCHIVE_DIR              Directory containing archived MP3s         (default: /var/www/radio/archive)
  *   HIDDEN_ARCHIVE_DIR       Directory for hidden (aged-out) archives   (default: /var/www/radio/hidden_archive)
@@ -53,6 +57,7 @@ import { buildDelayedPlaylist } from './lib/hls-delay.js';
 import { validateCaptionBody } from './lib/captions.js';
 import { isValidStreamName, StreamRegistry } from './lib/streams.js';
 import { StreamSupervisor } from './lib/stream-supervisor.js';
+import { GatewayCaptions } from './lib/gateway-captions.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -92,6 +97,17 @@ const CAPTION_RETENTION_SECONDS = Math.max(60, Number(process.env.CAPTION_RETENT
 const streams = new StreamRegistry({
   defaultDelaySeconds: INITIAL_DELAY_SECONDS,
   maxDelaySeconds: DELAY_MAX_SECONDS,
+});
+/** Captions pulled from pigateway's SSE bus; disabled when GATEWAY_EVENTS_URL is unset */
+const GATEWAY_EVENTS_URL = process.env.GATEWAY_EVENTS_URL || '';
+const GATEWAY_CAPTION_STREAM = process.env.GATEWAY_CAPTION_STREAM || DEFAULT_STREAM;
+const gatewayCaptions = new GatewayCaptions({
+  baseUrl: isValidStreamName(GATEWAY_CAPTION_STREAM) ? GATEWAY_EVENTS_URL : '',
+  token: process.env.GATEWAY_TOKEN || '',
+  stream: GATEWAY_CAPTION_STREAM,
+  streams,
+  retentionSeconds: CAPTION_RETENTION_SECONDS,
+  log: (msg) => console.log(`[gateway-captions] ${msg}`),
 });
 const supervisor = new StreamSupervisor({
   hlsDir: HLS_DIR, archiveDir: ARCHIVE_DIR,
@@ -614,6 +630,10 @@ app.post(['/api/v1/streams/:name/captions', '/api/v1/captions'], requireToken, s
   res.status(202).json({ stream: req.stream, accepted });
 });
 
+app.get('/api/v1/captions/source', requireToken, (_req, res) => {
+  res.json({ captionSource: gatewayCaptions.status() });
+});
+
 app.get(['/api/v1/streams/:name/delay', '/api/v1/delay'], requireToken, streamFromRequest, (req, res) => {
   res.json({ stream: req.stream, delaySeconds: streams.delayOf(req.stream), maxSeconds: DELAY_MAX_SECONDS });
 });
@@ -827,7 +847,17 @@ const server = app.listen(PORT, () => {
   }
 
   _initEmailScheduler();
+
+  if (GATEWAY_EVENTS_URL && !isValidStreamName(GATEWAY_CAPTION_STREAM)) {
+    console.error('[gateway-captions] GATEWAY_CAPTION_STREAM is not a valid stream name - disabled');
+  } else if (GATEWAY_EVENTS_URL) {
+    console.log(`  GATEWAY_EVENTS_URL         : ${GATEWAY_EVENTS_URL} -> stream ${GATEWAY_CAPTION_STREAM}`);
+    gatewayCaptions.start();
+  }
 });
 
-process.once('SIGTERM', () => { void supervisor.close().finally(() => server.close()); });
-process.once('SIGINT', () => { void supervisor.close().finally(() => server.close()); });
+function shutdown() {
+  void Promise.allSettled([gatewayCaptions.stop(), supervisor.close()]).finally(() => server.close());
+}
+process.once('SIGTERM', shutdown);
+process.once('SIGINT', shutdown);

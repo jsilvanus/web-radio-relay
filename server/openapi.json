@@ -1129,7 +1129,47 @@
         }
       }
     },
-    "/api/v1/streams/lifecycle": {
+    "/api/v1/captions/source": {
+      "get": {
+        "operationId": "getCaptionSource",
+        "summary": "Status of the pigateway caption pull",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Caption source status (configured is false when GATEWAY_EVENTS_URL is unset)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "captionSource": {
+                      "type": "object",
+                      "properties": {
+                        "configured": { "type": "boolean" },
+                        "connected": { "type": "boolean" },
+                        "lastEventAt": { "type": ["integer", "null"], "description": "Epoch milliseconds of the last transcript event" },
+                        "received": { "type": "integer" },
+                        "rejected": { "type": "integer" },
+                        "deduped": { "type": "integer" },
+                        "reconnects": { "type": "integer" },
+                        "lastError": { "type": ["string", "null"] }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong token"
+          }
+        }
+      }
+    },    "/api/v1/streams/lifecycle": {
       "get": {
         "operationId": "listManagedStreamLifecycles",
         "summary": "List managed stream lifecycle states",

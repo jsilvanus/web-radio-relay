@@ -228,5 +228,68 @@ export const operations = [
         "required": true
       }
     ]
+  },
+  {
+    "operationId": "startManagedStream",
+    "method": "POST",
+    "path": "/api/v1/streams/{name}/start",
+    "summary": "Start pulling a configured source for a stream",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "stopManagedStream",
+    "method": "POST",
+    "path": "/api/v1/streams/{name}/stop",
+    "summary": "Stop a managed stream and finalize its archive",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "getManagedStreamLifecycle",
+    "method": "GET",
+    "path": "/api/v1/streams/{name}/lifecycle",
+    "summary": "Get desired and observed lifecycle state",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "getCaptionSource",
+    "method": "GET",
+    "path": "/api/v1/captions/source",
+    "summary": "Status of the pigateway caption pull",
+    "bearer": true,
+    "body": null,
+    "parameters": []
+  },
+  {
+    "operationId": "listManagedStreamLifecycles",
+    "method": "GET",
+    "path": "/api/v1/streams/lifecycle",
+    "summary": "List managed stream lifecycle states",
+    "bearer": true,
+    "body": null,
+    "parameters": []
   }
 ];

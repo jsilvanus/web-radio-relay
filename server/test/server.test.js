@@ -234,3 +234,10 @@ test('metrics need the metrics token and list stream liveness', async () => {
   assert.match(text, /web_radio_relay_stream_live\{stream="stream"\} 1/);
   assert.match(text, /web_radio_relay_uptime_seconds \d+/);
 });
+
+test('caption source status is token protected and reports disabled when no gateway is set', async () => {
+  assert.equal((await fetch(`${base}/api/v1/captions/source`)).status, 401);
+  const body = await (await fetch(`${base}/api/v1/captions/source`, { headers: auth })).json();
+  assert.equal(body.captionSource.configured, false);
+  assert.equal(body.captionSource.connected, false);
+});

@@ -471,6 +471,9 @@ Copy `.env.example` to `.env` and override only what you need.
 | `DEFAULT_STREAM` | `stream` | Stream used by the legacy routes without a name (`/api/status`, `/api/captions`) |
 | `HLS_SEGMENT_PREFIX` | `/hls/` | URL prefix of segment files named in the delayed playlist (nginx serves `/hls/`) |
 | `CAPTION_RETENTION_SECONDS` | `3600` | How long captions stay in memory |
+| `GATEWAY_EVENTS_URL` | *(unset)* | Base URL of pigateway (e.g. `https://host:port`). When set, the relay pulls captions from `GET <url>/api/v1/events?types=transcript` (SSE) and adds them to the stream named by `GATEWAY_CAPTION_STREAM`. Unset disables the pull. `POST /api/v1/captions` keeps working either way |
+| `GATEWAY_TOKEN` | *(unset)* | Bearer token sent to pigateway. Never shown in status output |
+| `GATEWAY_CAPTION_STREAM` | `DEFAULT_STREAM` | Stream that receives the gateway's captions |
 
 ### FFmpeg / on-publish.sh
 
@@ -584,6 +587,7 @@ Anonymous aggregate statistics, and the play events the widget sends. Both are p
 | Method and path | Purpose |
 |---|---|
 | `POST /api/v1/captions` | Push up to 100 caption segments: `{ "segments": [{ "lang", "text", "startedAt", "endedAt"? }] }`. `startedAt` is epoch milliseconds on the sender's clock (NTP-synced with the relay). Answers `202 { "accepted": n }`. One bad segment rejects the whole request with a `400` that names the field. |
+| `GET /api/v1/captions/source` | Status of the pigateway caption pull: `{ "captionSource": { "configured", "connected", "lastEventAt", "received", "rejected", "deduped", "reconnects", "lastError" } }`. See *Captions from pigateway* below. |
 | `GET /api/v1/delay` | `{ "delaySeconds", "maxSeconds" }` |
 | `PUT /api/v1/delay` | `{ "delaySeconds": 20 }`, an integer from 0 to `DELAY_MAX_SECONDS`. Applies at once to audio and captions. Not persisted: a restart returns to `DELAY_SECONDS`. |
 | `POST /api/v1/stats/session` | `{ "event": "start" \| "end", "streamName" }`. Sent by `on-publish.sh` and `on-publish-done.sh`. |
