@@ -199,6 +199,70 @@
             "description": "Required for archive-play."
           }
         }
+      },
+      "StreamLifecycle": {
+        "type": "object",
+        "required": [
+          "name",
+          "desiredState",
+          "state",
+          "live"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "desiredState": {
+            "enum": [
+              "stopped",
+              "running"
+            ]
+          },
+          "state": {
+            "enum": [
+              "stopped",
+              "starting",
+              "running",
+              "stopping",
+              "failed"
+            ]
+          },
+          "sourceConfigured": {
+            "type": "boolean"
+          },
+          "pid": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastTransitionAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "restartCount": {
+            "type": "integer"
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "live": {
+            "type": "boolean"
+          }
+        }
       }
     }
   },
@@ -928,6 +992,175 @@
             }
           }
         ]
+      }
+    },
+    "/api/v1/streams/{name}/start": {
+      "post": {
+        "operationId": "startManagedStream",
+        "summary": "Start pulling a configured source for a stream",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Start accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "stream": {
+                      "$ref": "#/components/schemas/StreamLifecycle"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name"
+          },
+          "401": {
+            "description": "Missing or wrong token"
+          },
+          "503": {
+            "description": "Source not configured or relay unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/stop": {
+      "post": {
+        "operationId": "stopManagedStream",
+        "summary": "Stop a managed stream and finalize its archive",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stopped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "stream": {
+                      "$ref": "#/components/schemas/StreamLifecycle"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name"
+          },
+          "401": {
+            "description": "Missing or wrong token"
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/lifecycle": {
+      "get": {
+        "operationId": "getManagedStreamLifecycle",
+        "summary": "Get desired and observed lifecycle state",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lifecycle state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "stream": {
+                      "$ref": "#/components/schemas/StreamLifecycle"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong token"
+          }
+        }
+      }
+    },
+    "/api/v1/streams/lifecycle": {
+      "get": {
+        "operationId": "listManagedStreamLifecycles",
+        "summary": "List managed stream lifecycle states",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lifecycle states",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "streams": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/StreamLifecycle"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong token"
+          }
+        }
       }
     }
   }
