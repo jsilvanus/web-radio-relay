@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { StreamSupervisor } from '../lib/stream-supervisor.js';
 
 function setup() {
@@ -14,7 +15,7 @@ function setup() {
     logDir: path.join(root, 'logs'), sourceTemplate: 'rtsp://mediamtx/{name}',
     retryMs: 60000, spawnProcess: (_cmd, _args) => {
       const child = new EventEmitter(); child.pid = 1234; child.exitCode = null; child.signalCode = null;
-      child.stderr = new EventEmitter(); child.kill = (signal) => { child.signalCode = signal; queueMicrotask(() => child.emit('close', null, signal)); return true; };
+      child.stderr = new PassThrough(); child.kill = (signal) => { child.signalCode = signal; queueMicrotask(() => child.emit('close', null, signal)); return true; };
       children.push(child); queueMicrotask(() => child.emit('spawn')); return child;
     }
   });
