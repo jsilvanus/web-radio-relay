@@ -1,8 +1,8 @@
 # web-radio-relay
 
 Web radio relay: audio, captions and translations for browsers, with a listener delay set on the server. Tuberadio, the prototype it grew from, lives in `jsilvanus/tuberadio`.
-> **Audio-only web radio from an RTMP stream.**  
-> Takes a live RTMP push (e.g. from a YouTube fan-out project), strips video with FFmpeg, exposes audio as an HLS stream, archives every transmission as a timestamped MP3, and provides an embeddable vanilla-JS player widget.
+> **Audio-only web radio relay.**  
+> Pulls a configurable audio input (legacy local RTMP ingest by default; RTSP/MediaMTX can be selected with `AUDIO_INPUT_URL`), strips video with FFmpeg, exposes audio as HLS, archives each transmission as a timestamped MP3, and provides an embeddable vanilla-JS player widget.
 
 ![web-radio-relay dev site](https://github.com/user-attachments/assets/46fc9fea-8dbf-40ba-bd4e-bbd64ec310ac)
 
@@ -470,6 +470,7 @@ Copy `.env.example` to `.env` and override only what you need.
 | `HLS_TIME` | `4` | HLS segment duration in seconds |
 | `HLS_LIST_SIZE` | `10` | Minimum number of segments kept in the rolling playlist. Raised automatically to cover `DELAY_MAX_SECONDS` |
 | `DELAY_MAX_SECONDS` | `60` | Largest listener delay the relay accepts; sizes the live playlist. Must match the API's value |
+| `AUDIO_INPUT_URL` | `rtmp://127.0.0.1/live/<stream-name>` | FFmpeg input URL override. Use the actual configured MediaMTX RTSP URL when pulling PiVoice audio directly; unset preserves legacy RTMP ingest. |
 
 ---
 
