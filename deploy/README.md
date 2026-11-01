@@ -31,3 +31,6 @@ Tags: `latest`, `sha-<full sha>`, and the version for `v*` tags. Pin `IMAGE_TAG`
 - Convention: apps live in `/opt/apps/<app>/docker-compose.yml` with a `.env`, on `traefik-public` (plus `shared_multi_network` if they use Postgres or MinIO), no published ports. The relay uses neither Postgres nor MinIO, so it only joins `traefik-public`.
 - Prometheus jobs use `authorization.credentials_file: /tmp/tokens/<app>`, fed from `METRICS_TOKEN_<APP>` in infra's `secrets.enc.yaml`.
 - The VPS has 4 GB RAM shared with all apps; memory limits are set in the compose.
+
+## Default stream
+The production default stream (plain `/listen`, legacy unnamed routes) is `keskuskirkko`. Override with `DEFAULT_STREAM` in the environment variables.
