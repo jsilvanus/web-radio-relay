@@ -180,6 +180,16 @@ test('listener page is served and loads hls.js and the caption feed', async () =
   assert.match(html, /\/api\/streams\//);
 });
 
+test('root and named stream paths redirect to listener page', async () => {
+  const root = await fetch(`${base}/`, { redirect: 'manual' });
+  assert.equal(root.status, 302);
+  assert.equal(root.headers.get('location'), '/listen');
+
+  const stream = await fetch(`${base}/keskuskirkko`, { redirect: 'manual' });
+  assert.equal(stream.status, 302);
+  assert.equal(stream.headers.get('location'), '/listen?stream=keskuskirkko');
+});
+
 test('two streams keep their own delay and captions', async () => {
   writeLive(12, 4, 'messu');
   const put = await fetch(`${base}/api/v1/streams/messu/delay`, {

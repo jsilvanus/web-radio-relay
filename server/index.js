@@ -615,6 +615,18 @@ app.get('/listen', (_req, res) => {
   res.type('html').sendFile(path.join(__dirname, 'public', 'listen.html'));
 });
 
+// Root path redirects to /listen
+app.get('/', (_req, res) => {
+  res.redirect(302, '/listen');
+});
+
+// Stream shortcut (e.g. /keskuskirkko) redirects to /listen?stream=keskuskirkko
+app.get('/:stream([a-z0-9_-]{1,32})', (req, res) => {
+  const stream = req.params.stream;
+  if (!isValidStreamName(stream)) return res.status(404).send('Not Found');
+  res.redirect(302, `/listen?stream=${encodeURIComponent(stream)}`);
+});
+
 // ---------------------------------------------------------------------------
 // Control API (Bearer RELAY_API_TOKEN). Each route exists per stream and,
 // without a name, for the default stream.
