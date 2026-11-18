@@ -108,7 +108,7 @@ A **destination** belongs to a stream: name, kind (`youtube`, `facebook`, `rtmp`
 - Off by default per stream; turned on in config (`recordOnLive`) or by `POST /api/v1/streams/{s}/recordings` (start) / `DELETE .../recordings/current` (stop).
 - **Copy only**: one ffmpeg reads `live/<s>` and writes fMP4 segments of 60 s (`-c copy -f segment -segment_format mp4 -movflags +frag_keyframe+empty_moov`) to a local spool [D]. Alternative: MediaMTX's own recorder (`record: yes`, fMP4 parts); same result, less control over names and start/stop by API. The ffmpeg way keeps one supervisor for everything.
 - An uploader moves each closed segment to S3 under `recordings/<stream>/<sessionId>/<n>.mp4`, retries with backoff, deletes the spool copy only after a verified upload (size + ETag). A crash loses at most the open segment. Spool size is capped (`RECORDING_SPOOL_MAX_BYTES`); when S3 is down for long the recording is marked degraded, not silently dropped.
-- At stop: a manifest `recordings/<stream>/<sessionId>/session.json` with start/end wall time, segment list, probe info, and the timeline of that session (captions as VTT, sections as chapters, graphics events). Optional `concat` to one MP4 (copy, `-f concat -c copy`) as a later job, on the fleet if the VPS is short of disk.
+- At stop: a manifest `recordings/<stream>/<sessionId>/session.json` with start/end wall time, segment list, probe info, and the timeline of that session (captions as VTT, sections as chapters, graphics events; full list in 7.2). Optional `concat` to one MP4 (copy, `-f concat -c copy`) as a later job, on the fleet if the VPS is short of disk.
 - **Saarnavideo handoff** [D]: the session manifest is written in the shape of the LCYT handoff manifest v1 that Saarnavideo already imports (`POST /api/imports/lcyt`: feeds with parts, captions per language, variables, cue markers). Sections become cue markers, captions become the transcript run. This gives Saarnavideo the service without downloading it from YouTube (a goal that was parked on 2026-11-03).
 - Raw only: recording the `cc` variant is not offered (it is the same picture, later).
 - The MP3 radio archive stays as it is (local volume, ageing rules); optional copy to S3 later.
@@ -153,8 +153,26 @@ The relay serves the same contract [D]:
 - `GET /api/v1/viewer/{key}` (public, CORS `*`, outside the Bearer-protected `/api/v1` rules; the key is a per-stream viewer key in config, default the stream name). Events are released on the delayed clock, so a viewer page beside the relay's audio or video is in step with it.
 - One `caption` event per final caption. Translations that arrive later re-send the same `sequence` with the `translations` map filled in (the LCYT viewer replaces the text, so this shows the translation when it arrives). `codes.section` carries the current `section` title. `timestamp` uses LCYT's format (ISO without `Z`).
 - `graphic` timeline events go out as an extra SSE event (`graphic`); the LCYT viewer ignores unknown events, the relay's pages use them. Mapping them onto LCYT's DSK `graphics` event is later work [U].
-- Result: LCYT's viewer pages and the TV app work against the relay with `?server=<relay>`, and the relay's own `/listen` and `/watch` reuse the same layout ideas (large caption overlay, section badge, `lang=all` columns) in plain HTML. The payload shape is copied, not imported; a contract test in each repository keeps them in step.
-- **Hymn words and copyright** [U, needs Juha]: publishing hymn texts and slides on a public page may need a licence for newer texts. The relay only carries what the Pi sends; the Pi side decides what is public. A per-stream switch `publicGraphics` (default off) keeps graphics to authenticated viewers until this is cleared.
+- **The viewer lives in the relay** (Juha, 2026-11-18): the relay serves its own viewer pages, ported from LCYT's `ViewerPage` and `EmbedViewerPage`: `/view/{key}` (full screen, same URL params: `theme`, `fontsize`, `lang` = a language, `original` or `all`), `/embed/viewer?key=` (iframe with history) and, new, the video and audio player around them (`/watch`, `/listen`). They need no LCYT backend. Added to what LCYT shows: a hymn panel (verse text, hymn number and title), a slide/picture panel, the section heading, and a language choice that lists the stream's visible languages.
+- Port, not import: the pages are plain JS + one CSS file built with Vite in `viewer/` (no React dependency needed for this size) [D]. The payload shape is copied from LCYT; a contract test in each repository keeps the two in step, so LCYT's own viewer pages and the TV app also work against the relay with `?server=<relay>`.
+- **Hymn words** (Juha, 2026-11-18: displayable): `graphic` events of kind `hymn-verse` carry `{ hymnNumber, title, verse, lines[] }` and are shown publicly in the viewer, released on the delayed clock like captions. The Pi side (piprogram/pirundown through pigateway) decides what is sent; the relay shows what it gets. A per-stream switch `publicGraphics` (default **on**) remains for a stream where graphics must stay private. Licences for newer hymn texts are the parish's matter, not a relay feature.
+
+### 7.2 Sidecars
+
+Every data channel is also written as a **sidecar** next to the media, so a recording or a later viewer has everything the live viewer had [D]:
+
+| Sidecar | Live (HLS) | Saved (S3, per recording session) |
+|---|---|---|
+| Captions, per language | WebVTT subtitle rendition in the HLS master playlist (`#EXT-X-MEDIA:TYPE=SUBTITLES`), segments cut on the same PDT boundaries as the media | `captions.<lang>.vtt` |
+| Translations, per language | same, one rendition per visible language | `captions.<lang>.vtt` (marked as translation in the manifest) |
+| Sections | in the viewer SSE (`codes.section`) and the timeline | `sections.json` + `chapters.vtt` (WebVTT chapters) |
+| Hymns | viewer SSE `graphic`, timeline | `hymns.json` (number, title, verses with times) |
+| Graphics and pictures | viewer SSE `graphic`, assets at `/api/assets/{hash}` | `graphics.json` + the referenced assets copied under `assets/` |
+| Other data (markers, variables, unknown pigateway types kept as raw) | timeline | `events.jsonl` (everything, one event per line) |
+
+- The live WebVTT renditions are generated by the relay from the timeline (it already knows segment PDTs), so they are delayed with the media and need no ffmpeg. A native HLS player (Safari, TV apps) then shows captions even without the relay's own page.
+- Sidecars are written at session stop and refreshed every 60 s during the session (so a crash loses at most a minute), all listed in `session.json` and in the handoff manifest for Saarnavideo.
+- A sidecar can also be pushed without a recording (`GET /api/v1/streams/{s}/sidecars?from=&to=` builds them on request from the timeline store).
 - Retention: timeline kept in SQLite for `TIMELINE_RETENTION_DAYS` (and in the recording manifest when recorded). Real transcripts with names are never committed to this repository (test data is invented).
 
 ---
@@ -276,8 +294,9 @@ Destination keys encrypted at rest, write-only through the API (`hasKey: true` c
 | 3 | MediaMTX on the VPS | Compose service, auth hook, runOnReady/NotReady hooks, radio pulls from MediaMTX (`RADIO_SOURCE_URL_TEMPLATE`), probe on ready; nginx-rtmp kept for HTTP static + rollback | 2 |
 | 4 | Fan-out | Destinations (encrypted keys), one copy ffmpeg each, state, backoff, API, pigateway control routes | 3 |
 | 5 | Recording | Segment recorder, S3 uploader with spool, session manifest, handoff manifest v1 for Saarnavideo | 3 |
-| 6 | Video HLS | Copy HLS packager, delayed video playlist, `/watch` page, widget video mode | 3 |
-| 7 | Timeline | Event store, SSE ingest of sections/graphics, push API, assets in S3, public timeline + SSE, pages show sections and graphics | 1 |
+| 6 | Video HLS | Copy HLS packager, delayed video playlist, master playlist with WebVTT caption/translation renditions | 3, 7 |
+| 7 | Timeline and sidecars | Event store, SSE ingest of sections/hymns/graphics, push API, assets in S3, public timeline, LCYT-compatible viewer SSE, sidecar writers (7.2) | 1 |
+| 7b | Viewer | `viewer/` pages ported from LCYT (`/view`, `/embed/viewer`, `/watch`, `/listen`): captions, translations, section, hymn and picture panels | 6, 7 |
 | 8 | Translations | Translation ingest from the pigateway bus and PiVoice push, per-stream visible languages, late flagging | 7 |
 | 9 | Captioner | FLV parser/writer, 608 pop-on encoder, SEI writer, hold buffer, `cc` variant, destinations may pick `cc`; fleet `libx264` fallback documented | 3, 7 |
 | 10 | Public ingest | RTMPS (and SRT experiment) on MediaMTX with tokens, for the field-radio app | 3; firewall rules set on the VPS |
@@ -305,7 +324,7 @@ Transcoding of any kind on the VPS (ABR ladders, resolution changes, burned-in g
 | Caption sync drifts | E3: clapper test, measure `CAPTION_SYNC_OFFSET_MS`; check drift over 90 min | Pi wall-clock stamps in the stream |
 | Upstream bandwidth from the church | E4: measure tunnel throughput with video + radio | lower Pi encoder bitrate; direct RTMPS publish |
 | VPS bandwidth for HLS viewers | E5: metrics during a real service | viewer cap, CDN later |
-| Hymn text and slide rights | Juha checks licences | `publicGraphics` off |
+| Hymn text and slide rights | parish's matter | `publicGraphics` off per stream |
 | MediaMTX migration breaks the radio | staged: MediaMTX beside nginx-rtmp for one service | switch tunnel back |
 
 ---
@@ -317,9 +336,10 @@ Settled (Juha, 2026-11-18):
 2. **Public ingest**: allowed, always with a per-stream key/token.
 3. **Translation provider**: answered by the PiVoice translation plan; the relay only consumes translations.
 4. **Rename**: later.
-5. **Media display**: modelled on the LCYT viewer, with a compatible viewer SSE (7.1).
+5. **Media display**: the LCYT viewer lives in the relay (ported pages plus a compatible viewer SSE, 7.1).
+6. **Hymn words**: displayable publicly; `publicGraphics` default on.
+7. **Sidecars**: captions, translations, hymns, sections, graphics and other data saved beside the media in S3 and served as HLS sidecars (7.2).
 
-Still open:
-6. **Hymn words on a public page**: allowed now, or behind `publicGraphics` (default off) until licences are checked. Until answered, the default stays off.
+Nothing is open for Juha now; the remaining [U] items are experiments (section 15).
 
 Everything else above is a [D] default the implementing threads may follow.
