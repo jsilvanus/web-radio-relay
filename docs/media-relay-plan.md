@@ -134,7 +134,7 @@ All non-media data goes into one **timeline** per stream: events `{ id, type, la
 | Type | Source | Payload |
 |---|---|---|
 | `caption` | pigateway SSE `transcript` (today), `POST .../captions` | `text`, `lang`, `final` |
-| `translation` | translator (below), or pushed | `text`, `lang`, `sourceId` (caption it translates) |
+| `translation` | pigateway SSE `translation` (produced by PiVoice), or PiVoice's direct push | `text`, `lang`, `sourceId` (caption it translates, PiVoice `sourceKey`), `model?` |
 | `section` | pigateway SSE `section`/`rundown` (pirundown walker) | `title`, `kind` (reading, hymn, sermon...), `index` |
 | `graphic` | pigateway/piprogram events, or pushed | `kind` (`hymn-verse`, `slide`, `image`, `text`), `title`, `text?`, `assetId?`, `clear` |
 | `marker` | operator, API | free label (for recordings) |
@@ -142,7 +142,7 @@ All non-media data goes into one **timeline** per stream: events `{ id, type, la
 - **Ingest**: extend the existing SSE pull (`gateway-captions.js`) to subscribe to `transcript,section,rundown,graphic` (`types=` list) and map each type; unknown types are ignored and counted. Push API: `POST /api/v1/streams/{s}/events` (batch, same validation style as captions). The pigateway event names for sections and piprogram graphics must be read from their contracts before building [U].
 - **Assets** (slide or picture PNG/JPEG/WebP): `POST /api/v1/streams/{s}/assets` stores in S3 (content-addressed), served at `/api/assets/{hash}` with long cache headers. A `graphic` event refers to it by id. Size and type limits as in Saarnavideo's library.
 - **Public read**: `GET /api/streams/{s}/timeline?from=&types=&lang=` (due events only, same `next` cursor as captions today); SSE variant `GET /api/streams/{s}/timeline/events` for the pages so they do not poll. Old `/captions` routes stay.
-- **Translations**: captions in other languages are already ordinary captions with another `lang`. A translator is a separate producer: the relay posts each final caption to a translation endpoint (`TRANSLATE_URL`, OpenAI-compatible or a small HTTP contract; for example the LLM on the operator PC through the fleet, or a hosted API) and adds the answers as `translation` events [D]. Translation adds a few seconds; the listener delay must cover caption latency + translation latency, or the translation shows after its moment (still shown, flagged late). Languages per stream in config (`translateTo: ["sv","en"]`).
+- **Translations** [D, aligned with the PiVoice translation plan, pivoice `docs/translations/plan.md` section 10.2]: the relay does **not** call a translation service. PiVoice owns translation (fffleet `translate` jobs on the operator PC) and publishes finished translations; the relay consumes them from the pigateway SSE pull (`types=transcript,translation,...`) and from PiVoice's direct push (`POST .../captions` segments with another `lang`, which `captions.js` already accepts for overlapping times), and stores them as `translation` timeline events. Times are the source segment's audio times, so they release on the same clock as the caption. The listener delay must cover STT latency + translation latency (PiVoice reports p95); a translation that arrives after its moment is still shown, flagged late and counted. Which languages a page offers is per-stream config (`visibleLanguages: ["fi","sv","en"]`); no `TRANSLATE_URL`.
 - **Pages**: `/listen` and `/watch` show the current section as a heading, captions with a language choice, and a graphics panel (hymn verse text, slide image). Graphics are **never burned into the video** (that needs decoding); they are web overlays for our own viewers only.
 - **Hymn words and copyright** [U, needs Juha]: publishing hymn texts and slides on a public page may need a licence for newer texts. The relay only carries what the Pi sends; the Pi side decides what is public. A per-stream switch `publicGraphics` (default off) keeps graphics to authenticated viewers until this is cleared.
 - Retention: timeline kept in SQLite for `TIMELINE_RETENTION_DAYS` (and in the recording manifest when recorded). Real transcripts with names are never committed to this repository (test data is invented).
@@ -266,7 +266,7 @@ Destination keys encrypted at rest, write-only through the API (`hasKey: true` c
 | 5 | Recording | Segment recorder, S3 uploader with spool, session manifest, handoff manifest v1 for Saarnavideo | 3 |
 | 6 | Video HLS | Copy HLS packager, delayed video playlist, `/watch` page, widget video mode | 3 |
 | 7 | Timeline | Event store, SSE ingest of sections/graphics, push API, assets in S3, public timeline + SSE, pages show sections and graphics | 1 |
-| 8 | Translations | Translator adapter, per-stream languages, late flagging | 7 |
+| 8 | Translations | Translation ingest from the pigateway bus and PiVoice push, per-stream visible languages, late flagging | 7 |
 | 9 | Captioner | FLV parser/writer, 608 pop-on encoder, SEI writer, hold buffer, `cc` variant, destinations may pick `cc`; fleet `libx264` fallback documented | 3, 7 |
 | 10 | Public ingest | RTMPS (and SRT experiment) on MediaMTX with tokens, for the field-radio app | 3, needs Juha's OK for ports |
 
@@ -302,7 +302,7 @@ Transcoding of any kind on the VPS (ABR ladders, resolution changes, burned-in g
 
 1. **Media core**: MediaMTX on the VPS replacing nginx-rtmp (recommended), or keep nginx-rtmp and add only Node fan-out.
 2. **Public ingest ports** for phones and guest encoders (RTMPS, later SRT), each with a firewall rule.
-3. **Translation provider**: operator PC LLM through the fleet (no data leaves the church side, needs the PC on) or a hosted API.
+3. **Translation provider**: answered by the PiVoice translation plan (its decision 1, translation engine); the relay only consumes translations.
 4. **Hymn words on a public page**: allowed now, or behind `publicGraphics` until licences are checked.
 5. Repository rename now or later (no code depends on it).
 
