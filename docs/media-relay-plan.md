@@ -57,14 +57,13 @@ One small service on a VPS that takes one live stream in and does everything a c
                    └─ listener page, widget, public read API
 ```
 
-### 3.1 Media core: MediaMTX on the VPS [D]
+### 3.1 Media core: MediaMTX on the VPS (decided by Juha, 2026-11-18)
 
 Put MediaMTX in front and retire nginx-rtmp after a migration window.
 
 - Why: one process gives RTMP, RTMPS, SRT and WHIP ingest, per-path publish/read auth through an HTTP hook, `runOnReady`/`runOnNotReady` hooks, fMP4 recording segments, and read-side RTSP/RTMP for local consumers. All copy, no decode. nginx-rtmp offers RTMP only, is unmaintained, and has no real auth.
 - The existing lifecycle design already expects this: `RADIO_SOURCE_URL_TEMPLATE=rtsp://mediamtx:8554/{name}` makes the radio a pull from MediaMTX (plan.md "Current input architecture").
 - Ports: RTMP on loopback (tunnel publishers), optional public RTMPS and SRT (section 9). RTSP and the MediaMTX API only on the internal Docker network. MediaMTX's own HLS and WebRTC servers off at first (the relay serves HLS itself, section 6; MediaMTX HLS stays an option).
-- Alternative kept open: keep nginx-rtmp and only add Node fan-out. Cheaper now, but leaves auth, RTMPS/SRT for phones and clean local reads unsolved. Not recommended.
 
 ### 3.2 Control plane: the relay API
 
@@ -123,7 +122,7 @@ A **destination** belongs to a stream: name, kind (`youtube`, `facebook`, `rtmp`
 - The existing delayed playlist (`hls-delay.js`, PDT-based) works for any media playlist, so video gets the same per-stream listener delay and the same caption clock: `GET /api/streams/{s}/hls/video/delayed.m3u8`. Playlist length is sized from `DELAY_MAX_SECONDS` as today.
 - Segment duration follows the source GOP when copying; the publisher must send a keyframe at least every `HLS_TIME` seconds, or segments grow [U: check the Pi/ATEM encoder settings].
 - Served by the relay's nginx (static) behind Traefik. Bandwidth is the real limit: each viewer pulls the full bitrate (for example 4 Mb/s). The VPS link and traffic allowance cap the audience [U: measure; a CDN in front is a later option].
-- Player: `/watch?stream=<s>` (video + captions + data panel), built like `/listen` (one HTML file, hls.js from cdnjs). The widget gets a `data-mode="video"` option.
+- Player: `/watch?stream=<s>` (video + captions + data panel), built like `/listen` (one HTML file, hls.js from cdnjs), with its caption and data display modelled on the LCYT viewer (section 7.1). The widget gets a `data-mode="video"` option.
 
 ---
 
@@ -143,7 +142,18 @@ All non-media data goes into one **timeline** per stream: events `{ id, type, la
 - **Assets** (slide or picture PNG/JPEG/WebP): `POST /api/v1/streams/{s}/assets` stores in S3 (content-addressed), served at `/api/assets/{hash}` with long cache headers. A `graphic` event refers to it by id. Size and type limits as in Saarnavideo's library.
 - **Public read**: `GET /api/streams/{s}/timeline?from=&types=&lang=` (due events only, same `next` cursor as captions today); SSE variant `GET /api/streams/{s}/timeline/events` for the pages so they do not poll. Old `/captions` routes stay.
 - **Translations** [D, aligned with the PiVoice translation plan, pivoice `docs/translations/plan.md` section 10.2]: the relay does **not** call a translation service. PiVoice owns translation (fffleet `translate` jobs on the operator PC) and publishes finished translations; the relay consumes them from the pigateway SSE pull (`types=transcript,translation,...`) and from PiVoice's direct push (`POST .../captions` segments with another `lang`, which `captions.js` already accepts for overlapping times), and stores them as `translation` timeline events. Times are the source segment's audio times, so they release on the same clock as the caption. The listener delay must cover STT latency + translation latency (PiVoice reports p95); a translation that arrives after its moment is still shown, flagged late and counted. Which languages a page offers is per-stream config (`visibleLanguages: ["fi","sv","en"]`); no `TRANSLATE_URL`.
-- **Pages**: `/listen` and `/watch` show the current section as a heading, captions with a language choice, and a graphics panel (hymn verse text, slide image). Graphics are **never burned into the video** (that needs decoding); they are web overlays for our own viewers only.
+- **Pages**: `/listen` and `/watch` show the current section as a heading, captions with a language choice, and a graphics panel (hymn verse text, slide image). Graphics are **never burned into the video** (that needs decoding); they are web overlays for our own viewers only. Display follows the LCYT viewer (7.1).
+
+### 7.1 Display modelled on the LCYT viewer (Juha, 2026-11-18)
+
+LCYT already has the viewer side: `ViewerPage` (`/view/:key`, full screen, URL params `theme`, `fontsize`, `lang` = a language, `original` or `all` for one column per language, section badge from `codes.section`, DSK graphics overlay), `EmbedViewerPage` (`/embed/viewer`, iframe with history) and the Android TV app `lcyt-tv`. All read one public SSE stream, `GET /api/v1/viewer/:key`, events `connected` and `caption` with `{ text, composedText?, translations: { <lang>: text }, codes?: { section }, sequence, timestamp }`.
+
+The relay serves the same contract [D]:
+
+- `GET /api/v1/viewer/{key}` (public, CORS `*`, outside the Bearer-protected `/api/v1` rules; the key is a per-stream viewer key in config, default the stream name). Events are released on the delayed clock, so a viewer page beside the relay's audio or video is in step with it.
+- One `caption` event per final caption. Translations that arrive later re-send the same `sequence` with the `translations` map filled in (the LCYT viewer replaces the text, so this shows the translation when it arrives). `codes.section` carries the current `section` title. `timestamp` uses LCYT's format (ISO without `Z`).
+- `graphic` timeline events go out as an extra SSE event (`graphic`); the LCYT viewer ignores unknown events, the relay's pages use them. Mapping them onto LCYT's DSK `graphics` event is later work [U].
+- Result: LCYT's viewer pages and the TV app work against the relay with `?server=<relay>`, and the relay's own `/listen` and `/watch` reuse the same layout ideas (large caption overlay, section badge, `lang=all` columns) in plain HTML. The payload shape is copied, not imported; a contract test in each repository keeps them in step.
 - **Hymn words and copyright** [U, needs Juha]: publishing hymn texts and slides on a public page may need a licence for newer texts. The relay only carries what the Pi sends; the Pi side decides what is public. A per-stream switch `publicGraphics` (default off) keeps graphics to authenticated viewers until this is cleared.
 - Retention: timeline kept in SQLite for `TIMELINE_RETENTION_DAYS` (and in the recording manifest when recorded). Real transcripts with names are never committed to this repository (test data is invented).
 
@@ -215,7 +225,8 @@ Replace the single admin token with scoped tokens, stored hashed in SQLite:
 
 ### 9.3 Public ingest (for phones and guest encoders)
 
-- Today only the SSH tunnel reaches the RTMP port. Phones (the field-radio app) need a public path: RTMPS (TLS on MediaMTX with a certificate for the relay host, host port published beside Traefik, since Traefik has no TCP router) and/or SRT (UDP port) [D: RTMPS first, SRT as an experiment]. Each new public port needs a firewall rule and Juha's approval.
+- Decided (Juha, 2026-11-18): public ingest is allowed **with a key/token**. Every publish needs a per-stream publish token (9.1, 9.2); a bare stream name is never enough on any port.
+- Today only the SSH tunnel reaches the RTMP port. Phones (the field-radio app) and guest encoders get RTMPS (TLS on MediaMTX with a certificate for the relay host, host port published beside Traefik, since Traefik has no TCP router), and SRT (UDP port) as an experiment. Each new public port still needs its firewall rule set on the VPS by Juha or the VPS session.
 - The SSH tunnel stays for the Pi. A restricted tunnel user per phone (forward to the RTMP port only, no shell) remains an option for the field app, but tokens make it unnecessary.
 
 ### 9.4 Host hardening (operations, done in the deployment repository, listed so it is not lost)
@@ -249,6 +260,7 @@ Destination keys encrypted at rest, write-only through the API (`hasKey: true` c
 ## 12. Compatibility and rename
 
 - All current routes stay: `/api/status`, `/api/streams/...`, `/api/hls/delayed.m3u8`, `/api/v1/streams/{name}/start|stop|lifecycle`, captions routes, `/listen`, the widget. New routes are additive.
+- Rename: later (Juha, 2026-11-18). Nothing in phases 1 to 10 waits for it.
 - Env names stay; new ones get a neutral `RELAY_` / feature prefix. Image names stay until a rename; a renamed repo publishes both names for one release.
 - nginx-rtmp ingest keeps working until MediaMTX has run one real service (rollback = switch the tunnel target back).
 
@@ -268,7 +280,7 @@ Destination keys encrypted at rest, write-only through the API (`hasKey: true` c
 | 7 | Timeline | Event store, SSE ingest of sections/graphics, push API, assets in S3, public timeline + SSE, pages show sections and graphics | 1 |
 | 8 | Translations | Translation ingest from the pigateway bus and PiVoice push, per-stream visible languages, late flagging | 7 |
 | 9 | Captioner | FLV parser/writer, 608 pop-on encoder, SEI writer, hold buffer, `cc` variant, destinations may pick `cc`; fleet `libx264` fallback documented | 3, 7 |
-| 10 | Public ingest | RTMPS (and SRT experiment) on MediaMTX with tokens, for the field-radio app | 3, needs Juha's OK for ports |
+| 10 | Public ingest | RTMPS (and SRT experiment) on MediaMTX with tokens, for the field-radio app | 3; firewall rules set on the VPS |
 
 Phases 4 to 7 can run in parallel after 3; 9 is the riskiest and should start with an experiment (section 15) before the full PR.
 
@@ -298,12 +310,16 @@ Transcoding of any kind on the VPS (ABR ladders, resolution changes, burned-in g
 
 ---
 
-## 16. Decisions for Juha
+## 16. Decisions
 
-1. **Media core**: MediaMTX on the VPS replacing nginx-rtmp (recommended), or keep nginx-rtmp and add only Node fan-out.
-2. **Public ingest ports** for phones and guest encoders (RTMPS, later SRT), each with a firewall rule.
-3. **Translation provider**: answered by the PiVoice translation plan (its decision 1, translation engine); the relay only consumes translations.
-4. **Hymn words on a public page**: allowed now, or behind `publicGraphics` until licences are checked.
-5. Repository rename now or later (no code depends on it).
+Settled (Juha, 2026-11-18):
+1. **Media core**: MediaMTX on the VPS, replacing nginx-rtmp after a migration window.
+2. **Public ingest**: allowed, always with a per-stream key/token.
+3. **Translation provider**: answered by the PiVoice translation plan; the relay only consumes translations.
+4. **Rename**: later.
+5. **Media display**: modelled on the LCYT viewer, with a compatible viewer SSE (7.1).
+
+Still open:
+6. **Hymn words on a public page**: allowed now, or behind `publicGraphics` (default off) until licences are checked. Until answered, the default stays off.
 
 Everything else above is a [D] default the implementing threads may follow.
