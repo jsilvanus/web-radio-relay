@@ -67,6 +67,7 @@ before(async () => {
       RELAY_API_TOKEN: TOKEN,
       RELAY_DB_PATH: ':memory:',
       METRICS_BEARER_TOKEN: 'metrics-token',
+      RELAY_SECRET_KEY: '5'.repeat(64),
       HOOK_SECRET: HOOK_SECRET,
       PUBLISH_AUTH: 'off',
       RADIO_SOURCE_URL_TEMPLATE: '',
@@ -726,4 +727,112 @@ test('viewer: a viewer that connects mid-service gets the current state', async 
   } finally {
     sse.close();
   }
+});
+
+// ---------------------------------------------------------------------------
+// Egress destinations (P4.1, P4.3). No ffmpeg is started here: start is only
+// called on a disabled destination, which answers 409 before any spawn.
+// ---------------------------------------------------------------------------
+
+function issueToken(scopes) {
+  const store = openStore(dbPath);
+  try {
+    return createToken(store.db, { scopes }, Date.now());
+  } finally {
+    store.close();
+  }
+}
+
+const DEST_KEY = 'ROUTE-TEST-KEY-901';
+
+test('destinations: a control-scope token creates, lists and reads them; the key never appears', async () => {
+  const control = issueToken(['stream:chapel:control']);
+  const created = await fetch(`${base}/api/v1/streams/chapel/destinations`, {
+    method: 'POST',
+    headers: withToken(control.token),
+    body: json({ name: 'main', kind: 'rtmp', url: 'rtmp://user:pw@relay.example.com/app', key: DEST_KEY }),
+  });
+  const createdText = await created.text();
+  assert.equal(created.status, 201, createdText);
+  const dest = JSON.parse(createdText).destination;
+  assert.match(dest.id, /^dst_[0-9a-f]{12}$/);
+  assert.equal(dest.hasKey, true);
+  assert.equal(dest.url, 'rtmp://[REDACTED]@relay.example.com/app');
+  assert.equal(dest.state.state, 'off');
+  assert.equal(createdText.includes(DEST_KEY), false);
+  assert.equal(createdText.includes(':pw@'), false);
+
+  const listed = await fetch(`${base}/api/v1/streams/chapel/destinations`, { headers: withToken(control.token) });
+  const listedText = await listed.text();
+  assert.equal(listed.status, 200);
+  const body = JSON.parse(listedText);
+  assert.equal(body.stream, 'chapel');
+  assert.deepEqual(body.destinations.map((d) => d.name), ['main']);
+  assert.equal(listedText.includes(DEST_KEY), false);
+  assert.equal(listedText.includes(sha256hex(DEST_KEY)), false);
+});
+
+test('destinations: view scope is 403, another stream is 403, no token is 401', async () => {
+  const view = issueToken(['stream:chapel:view']);
+  const other = issueToken(['stream:hall:control']);
+  const url = `${base}/api/v1/streams/chapel/destinations`;
+  assert.equal((await fetch(url, { headers: withToken(view.token) })).status, 403);
+  assert.equal((await fetch(url, { headers: withToken(other.token) })).status, 403);
+  assert.equal((await fetch(url)).status, 401);
+  assert.equal((await fetch(url, { method: 'POST', headers: withToken(view.token), body: json({ name: 'x', kind: 'rtmp', url: 'rtmp://a.example.com/x' }) })).status, 403);
+});
+
+test('destinations: the env admin token works; invalid bodies answer 400 naming the field', async () => {
+  const bad = await fetch(`${base}/api/v1/streams/chapel/destinations`, {
+    method: 'POST',
+    headers: auth,
+    body: json({ name: 'Main', kind: 'rtmp', url: 'rtmp://a.example.com/x' }),
+  });
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /name must match/);
+  const badStream = await fetch(`${base}/api/v1/streams/Chapel/destinations`, { headers: auth });
+  assert.equal(badStream.status, 400);
+});
+
+test('destinations: PATCH, start of a disabled one (409), stop and DELETE', async () => {
+  const url = `${base}/api/v1/streams/chapel/destinations`;
+  const made = await (await fetch(url, {
+    method: 'POST',
+    headers: auth,
+    body: json({ name: 'backup', kind: 'rtmp', url: 'rtmp://b.example.com/app', key: DEST_KEY, enabled: false }),
+  })).json();
+  const id = made.destination.id;
+
+  const patched = await fetch(`${url}/${id}`, { method: 'PATCH', headers: auth, body: json({ variant: 'cc' }) });
+  assert.equal(patched.status, 200);
+  assert.equal((await patched.json()).destination.variant, 'cc');
+  assert.equal((await fetch(`${url}/dst_000000000000`, { method: 'PATCH', headers: auth, body: json({ variant: 'raw' }) })).status, 404);
+
+  const start = await fetch(`${url}/${id}/start`, { method: 'POST', headers: auth });
+  assert.equal(start.status, 409);
+  assert.match((await start.json()).error, /disabled/);
+
+  const stop = await fetch(`${url}/${id}/stop`, { method: 'POST', headers: auth });
+  assert.equal(stop.status, 200);
+  const stopBody = await stop.json();
+  assert.equal(stopBody.id, id);
+  assert.equal(stopBody.state.state, 'off');
+  assert.equal((await fetch(`${url}/dst_000000000000/stop`, { method: 'POST', headers: auth })).status, 404);
+
+  assert.equal((await fetch(`${url}/${id}`, { method: 'DELETE', headers: auth })).status, 204);
+  assert.equal((await fetch(`${url}/${id}`, { method: 'DELETE', headers: auth })).status, 404);
+  const after = await (await fetch(url, { headers: auth })).text();
+  assert.equal(after.includes('"backup"'), false);
+  assert.equal(after.includes(DEST_KEY), false);
+});
+
+test('destinations: the per-stream limit answers 409 on the seventh destination', async () => {
+  const url = `${base}/api/v1/streams/limit/destinations`;
+  for (let i = 1; i <= 6; i++) {
+    const res = await fetch(url, { method: 'POST', headers: auth, body: json({ name: `d${i}`, kind: 'rtmp', url: 'rtmp://c.example.com/app' }) });
+    assert.equal(res.status, 201);
+  }
+  const seventh = await fetch(url, { method: 'POST', headers: auth, body: json({ name: 'd7', kind: 'rtmp', url: 'rtmp://c.example.com/app' }) });
+  assert.equal(seventh.status, 409);
+  assert.match((await seventh.json()).error, /at most 6/);
 });

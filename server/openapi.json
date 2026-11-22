@@ -397,6 +397,234 @@
             }
           }
         }
+      },
+      "Destination": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "url",
+          "variant",
+          "enabled",
+          "startWith",
+          "hasKey"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^dst_[0-9a-f]{12}$"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9_-]{1,32}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "youtube",
+              "facebook",
+              "rtmp"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "description": "The url without user and password. A key-like last path segment is shown as [REDACTED]. The stream key is never here: see hasKey."
+          },
+          "variant": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "cc"
+            ],
+            "description": "raw: the relay stream; cc: the captioned variant (stream-cc)."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "startWith": {
+            "type": "string",
+            "enum": [
+              "stream",
+              "manual"
+            ],
+            "description": "stream: start with the relay stream when it is ready (wired by a later task); manual: only by the start route."
+          },
+          "hasKey": {
+            "type": "boolean",
+            "description": "True when a stream key is stored (encrypted with RELAY_SECRET_KEY). The key is never returned."
+          }
+        }
+      },
+      "EgressState": {
+        "type": "object",
+        "properties": {
+          "stream": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "off",
+              "starting",
+              "live",
+              "retrying",
+              "failed"
+            ],
+            "description": "live after 5 s without exit; retrying after a crash (backoff 2 s doubling to 60 s); failed when ffmpeg could not be started (no automatic retry)."
+          },
+          "pid": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastTransitionAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "restartCount": {
+            "type": "integer"
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stderrTail": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string"
+            },
+            "description": "Last ffmpeg stderr lines, redacted (keys and credentials removed)."
+          }
+        }
+      },
+      "DestinationWithState": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Destination"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "$ref": "#/components/schemas/EgressState"
+              }
+            }
+          }
+        ]
+      },
+      "DestinationCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "kind",
+          "url"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9_-]{1,32}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "youtube",
+              "facebook",
+              "rtmp"
+            ],
+            "description": "facebook needs an rtmps:// url; youtube and facebook need a key."
+          },
+          "url": {
+            "type": "string",
+            "description": "rtmp:// or rtmps:// url (up to 2048 characters). The key goes in key, never in the url."
+          },
+          "key": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "Stream key, 1 to 512 printable characters without spaces. Stored encrypted; needs RELAY_SECRET_KEY on the server."
+          },
+          "variant": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "cc"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "startWith": {
+            "type": "string",
+            "enum": [
+              "stream",
+              "manual"
+            ]
+          }
+        }
+      },
+      "DestinationPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Only the fields given change. A changed kind, url, variant or key, or enabled set to false, stops a running egress child. key null or an empty string removes the stored key.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9_-]{1,32}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "youtube",
+              "facebook",
+              "rtmp"
+            ],
+            "description": "facebook needs an rtmps:// url; youtube and facebook need a key."
+          },
+          "url": {
+            "type": "string",
+            "description": "rtmp:// or rtmps:// url (up to 2048 characters). The key goes in key, never in the url."
+          },
+          "key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 512
+          },
+          "variant": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "cc"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "startWith": {
+            "type": "string",
+            "enum": [
+              "stream",
+              "manual"
+            ]
+          }
+        }
       }
     }
   },
@@ -1980,6 +2208,500 @@
           },
           "401": {
             "description": "Missing or wrong token"
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/destinations": {
+      "get": {
+        "operationId": "listDestinations",
+        "summary": "List a stream's egress destinations with their state",
+        "description": "Needs stream:<name>:control (admin passes). Each destination carries its egress state. The stream key is never returned.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Destinations of the stream, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "stream": {
+                      "type": "string"
+                    },
+                    "destinations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DestinationWithState"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name or body (the message names the field)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "503": {
+            "description": "RELAY_API_TOKEN is unset and no token is stored"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createDestination",
+        "summary": "Add an egress destination to a stream",
+        "description": "Creates the stream row when needed. Answers 409 when the stream already has MAX_DESTINATIONS_PER_STREAM destinations (default 6) or the name is taken, and 503 when a key is given but RELAY_SECRET_KEY is not set.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DestinationCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "destination": {
+                      "$ref": "#/components/schemas/DestinationWithState"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name or body (the message names the field)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "409": {
+            "description": "Limit reached or name already used on this stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "RELAY_SECRET_KEY is not set or invalid while a key is given",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/destinations/{id}": {
+      "patch": {
+        "operationId": "updateDestination",
+        "summary": "Change an egress destination",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Destination id, for example dst_0123456789ab.",
+            "schema": {
+              "type": "string",
+              "pattern": "^dst_[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DestinationPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "destination": {
+                      "$ref": "#/components/schemas/DestinationWithState"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name or body (the message names the field)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "404": {
+            "description": "No destination with that id on this stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name already used on this stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "RELAY_SECRET_KEY is not set or invalid while a key is given",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteDestination",
+        "summary": "Remove an egress destination",
+        "description": "Stops its egress child first.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Destination id, for example dst_0123456789ab.",
+            "schema": {
+              "type": "string",
+              "pattern": "^dst_[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "400": {
+            "description": "Invalid stream name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "404": {
+            "description": "No destination with that id on this stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/destinations/{id}/start": {
+      "post": {
+        "operationId": "startDestination",
+        "summary": "Start the egress child of one destination",
+        "description": "Idempotent while running. Pulls the relay stream (raw or cc) and pushes it with stream copy to the destination (no re-encoding). The key is read from storage here and never returned.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Destination id, for example dst_0123456789ab.",
+            "schema": {
+              "type": "string",
+              "pattern": "^dst_[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Egress state of the destination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "$ref": "#/components/schemas/EgressState"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name or body (the message names the field)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "404": {
+            "description": "No destination with that id on this stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Destination is disabled, or a YouTube or Facebook destination has no stream key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "RELAY_SECRET_KEY is not set or cannot read the stored key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/destinations/{id}/stop": {
+      "post": {
+        "operationId": "stopDestination",
+        "summary": "Stop the egress child of one destination",
+        "description": "Cancels a pending retry and sends SIGTERM (SIGKILL after a grace period).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Destination id, for example dst_0123456789ab.",
+            "schema": {
+              "type": "string",
+              "pattern": "^dst_[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Egress state of the destination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "$ref": "#/components/schemas/EgressState"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "404": {
+            "description": "No destination with that id on this stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }

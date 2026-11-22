@@ -26,6 +26,12 @@
  *   POST /api/v1/tokens              admin: issue a scoped token (value shown once)
  *   GET  /api/v1/tokens              admin: list tokens (never the values)
  *   DELETE /api/v1/tokens/:id        admin: revoke a token
+ *   GET    /api/v1/streams/{s}/destinations            list egress destinations with their state (control scope)
+ *   POST   /api/v1/streams/{s}/destinations            add a destination (key stored encrypted)
+ *   PATCH  /api/v1/streams/{s}/destinations/{id}       change a destination
+ *   DELETE /api/v1/streams/{s}/destinations/{id}       remove a destination (stops its egress)
+ *   POST   /api/v1/streams/{s}/destinations/{id}/start start one egress child
+ *   POST   /api/v1/streams/{s}/destinations/{id}/stop  stop one egress child
  *
  * Internal (not in openapi.json, not proxied by nginx):
  *   POST /internal/mediamtx/auth     MediaMTX authMethod http hook
@@ -98,6 +104,12 @@ import { createGatewayMapper } from './lib/gateway-map.js';
 import { addEvents, rangeEvents } from './lib/event-store.js';
 import { createEventBus, storeAndPublish } from './lib/event-bus.js';
 import { openViewerSession, closeViewerSessions, VIEWER_MODES } from './lib/viewer-sse.js';
+import { EgressSupervisor } from './lib/egress-supervisor.js';
+import {
+  DEFAULT_MAX_DESTINATIONS, createDestination, deleteDestination, destinationExists, listDestinations,
+  loadEgressTarget, updateDestination,
+} from './lib/destinations.js';
+import { DEFAULT_RTSP_BASE } from './lib/ffmpeg-input.js';
 import { validateEventBatch } from './lib/events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -189,6 +201,19 @@ const probeService = createProbeService({
 const readyHooks = createReadyHandler({
   supervisor, probe: probeService, radioOnReady: RADIO_ON_READY,
   log: (msg) => console.log(`[ready-hooks] ${msg}`),
+});
+
+/** Secret key (64 hex) that seals destination stream keys at rest. Unset = keys cannot be stored (503). */
+const RELAY_SECRET_KEY = process.env.RELAY_SECRET_KEY || '';
+/** Most destinations one stream may have (P4.1). */
+const MAX_DESTINATIONS_PER_STREAM = (() => {
+  const n = Number(process.env.MAX_DESTINATIONS_PER_STREAM);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_MAX_DESTINATIONS;
+})();
+/** One ffmpeg child per (stream, destination), pushing copies of the relay's streams to RTMP(S) (P4.3). */
+const egress = new EgressSupervisor({
+  rtspBase: process.env.MEDIAMTX_RTSP_BASE || DEFAULT_RTSP_BASE,
+  spawnProcess: spawn,
 });
 
 /** Email provider: 'sendgrid' | 'mailgun' | '' (disabled) */
@@ -628,6 +653,70 @@ app.get('/api/v1/streams/lifecycle', requireToken, (_req, res) => {
 app.get('/api/v1/streams/:name', requireToken, streamFromRequest, (req, res) => {
   res.json({ stream: streamView(req.stream) });
 });
+
+// ---------------------------------------------------------------------------
+// Egress destinations (P4.1, P4.3). Scope stream:<name>:control (admin passes).
+// Responses never contain a stream key; errors never contain one either.
+// ---------------------------------------------------------------------------
+const requireStreamControl = requireScope((req) => `stream:${req.params.name}:control`, { adminToken: RELAY_API_TOKEN, db });
+
+/** Maps errors from the destination helpers to a status; anything else is a 500 without details. */
+function destinationRoute(handler) {
+  return (req, res) => {
+    try {
+      handler(req, res);
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(err.statusCode).json({ error: err.message });
+        return;
+      }
+      console.error('[destinations]', err.name);
+      res.status(500).json({ error: 'internal error' });
+    }
+  };
+}
+
+app.get('/api/v1/streams/:name/destinations', requireStreamControl, streamFromRequest, destinationRoute((req, res) => {
+  const destinations = listDestinations(db, req.stream).map((d) => ({ ...d, state: egress.state(req.stream, d.id) }));
+  res.json({ stream: req.stream, destinations });
+}));
+
+app.post('/api/v1/streams/:name/destinations', requireStreamControl, streamFromRequest, destinationRoute((req, res) => {
+  const destination = createDestination(db, req.stream, req.body, {
+    secretKey: RELAY_SECRET_KEY, maxPerStream: MAX_DESTINATIONS_PER_STREAM, nowMs: Date.now(),
+  });
+  res.status(201).json({ destination: { ...destination, state: egress.state(req.stream, destination.id) } });
+}));
+
+app.patch('/api/v1/streams/:name/destinations/:id', requireStreamControl, streamFromRequest, destinationRoute((req, res) => {
+  const { destination, targetChanged } = updateDestination(db, req.stream, req.params.id, req.body, { secretKey: RELAY_SECRET_KEY });
+  // A running child keeps the url and key it was started with: stop it when those change.
+  if (targetChanged) egress.stop(req.stream, destination.id);
+  res.json({ destination: { ...destination, state: egress.state(req.stream, destination.id) } });
+}));
+
+app.delete('/api/v1/streams/:name/destinations/:id', requireStreamControl, streamFromRequest, destinationRoute((req, res) => {
+  if (!deleteDestination(db, req.stream, req.params.id)) {
+    res.status(404).json({ error: 'destination not found' });
+    return;
+  }
+  egress.stop(req.stream, req.params.id);
+  res.status(204).end();
+}));
+
+app.post('/api/v1/streams/:name/destinations/:id/start', requireStreamControl, streamFromRequest, destinationRoute((req, res) => {
+  const target = loadEgressTarget(db, req.stream, req.params.id, { secretKey: RELAY_SECRET_KEY });
+  if (!target.enabled) throw Object.assign(new Error('destination is disabled'), { statusCode: 409 });
+  res.json({ id: target.id, state: egress.start(req.stream, target) });
+}));
+
+app.post('/api/v1/streams/:name/destinations/:id/stop', requireStreamControl, streamFromRequest, destinationRoute((req, res) => {
+  if (!destinationExists(db, req.stream, req.params.id)) {
+    res.status(404).json({ error: 'destination not found' });
+    return;
+  }
+  res.json({ id: req.params.id, state: egress.stop(req.stream, req.params.id) });
+}));
 
 // ---------------------------------------------------------------------------
 // GET /api/streams — every stream the relay knows about
@@ -1235,7 +1324,7 @@ const server = app.listen(PORT, () => {
 
 function shutdown() {
   closeViewerSessions();
-  void Promise.allSettled([gatewayCaptions.stop(), supervisor.close()]).finally(() => server.close(() => store.close()));
+  void Promise.allSettled([gatewayCaptions.stop(), supervisor.close(), egress.close()]).finally(() => server.close(() => store.close()));
 }
 process.once('SIGTERM', shutdown);
 process.once('SIGINT', shutdown);
