@@ -10,6 +10,7 @@
  *   GET  /api/captions               captions released for listeners (?lang=&from=&limit=)
  *   GET  /api/openapi.json           the OpenAPI document of this API
  *   GET  /listen                     listener page: audio plus captions
+ *   GET  /api/v1/viewer/{key}        LCYT-compatible viewer SSE (?mode=live|delayed), public, CORS *
  *
  * Control (Bearer RELAY_API_TOKEN, see docs/API.md):
  *   POST /api/v1/captions            sender pushes timed captions (and later translations)
@@ -75,7 +76,8 @@ import { isValidStreamName, StreamRegistry } from './lib/streams.js';
 import { StreamSupervisor } from './lib/stream-supervisor.js';
 import { GatewayCaptions } from './lib/gateway-captions.js';
 import { createGatewayMapper } from './lib/gateway-map.js';
-import { addEvents } from './lib/event-store.js';
+import { createEventBus, storeAndPublish } from './lib/event-bus.js';
+import { openViewerSession, closeViewerSessions, VIEWER_MODES } from './lib/viewer-sse.js';
 import { validateEventBatch } from './lib/events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -128,6 +130,8 @@ const streams = new StreamRegistry({
   defaultDelaySeconds: INITIAL_DELAY_SECONDS,
   maxDelaySeconds: DELAY_MAX_SECONDS,
 });
+/** In-process fan-out of stored timeline events to the viewer SSE (P7.5) */
+const eventBus = createEventBus();
 /** Captions pulled from pigateway's SSE bus; disabled when GATEWAY_EVENTS_URL is unset */
 const GATEWAY_EVENTS_URL = process.env.GATEWAY_EVENTS_URL || '';
 const GATEWAY_CAPTION_STREAM = process.env.GATEWAY_CAPTION_STREAM || DEFAULT_STREAM;
@@ -139,7 +143,7 @@ const gatewayCaptions = new GatewayCaptions({
   retentionSeconds: CAPTION_RETENTION_SECONDS,
   log: (msg) => console.log(`[gateway-captions] ${msg}`),
   mapper: createGatewayMapper(),
-  storeEvents: (stream, events, nowMs) => addEvents(store.db, stream, events, nowMs),
+  storeEvents: (stream, events, nowMs) => storeAndPublish(store.db, eventBus, stream, events, nowMs),
 });
 const supervisor = new StreamSupervisor({
   hlsDir: HLS_DIR, archiveDir: ARCHIVE_DIR,
@@ -189,7 +193,8 @@ const controlLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later.' },
 });
 
-app.use('/api/v1/', controlLimiter);
+// The public viewer stream (P7.5) is not control traffic: it uses the public limiter instead (see below).
+app.use('/api/v1/', (req, res, next) => (req.path.startsWith('/viewer/') ? next() : controlLimiter(req, res, next)));
 app.use('/api/', (req, res, next) => (req.path.startsWith('/v1/') ? next() : apiLimiter(req, res, next)));
 app.use(express.json({ limit: '256kb' }));
 const requireToken = requireBearer(RELAY_API_TOKEN);
@@ -679,8 +684,29 @@ app.post('/api/v1/streams/:name/events', requireToken, streamFromRequest, (req, 
   const checked = validateEventBatch(req.body);
   if (!checked.ok) return res.status(400).json({ error: checked.error });
   const nowMs = Date.now();
-  const { added, deduped } = addEvents(store.db, req.stream, checked.events, nowMs);
+  const { added, deduped } = storeAndPublish(store.db, eventBus, req.stream, checked.events, nowMs);
   res.status(202).json({ added, deduped });
+});
+
+// GET /api/v1/viewer/{key} — LCYT-compatible viewer SSE (plan P7.5). Public: no Bearer token, CORS *,
+// public rate limit. The key is the stream name for now (no per-stream viewer key yet).
+app.get('/api/v1/viewer/:key', apiLimiter, (req, res) => {
+  const key = req.params.key;
+  if (!isValidStreamName(key)) {
+    return res.status(400).json({ error: 'Invalid viewer key: a stream name (a-z, 0-9, _ or -, up to 32 characters).' });
+  }
+  const requested = req.query.mode === undefined ? 'live' : req.query.mode;
+  if (!VIEWER_MODES.includes(requested)) {
+    return res.status(400).json({ error: 'mode must be live or delayed' });
+  }
+  openViewerSession({
+    res,
+    db,
+    bus: eventBus,
+    stream: key,
+    mode: requested,
+    delayMsOf: () => streams.delayOf(key) * 1000,
+  });
 });
 
 app.get('/api/v1/captions/source', requireToken, (_req, res) => {
@@ -1001,6 +1027,7 @@ const server = app.listen(PORT, () => {
 });
 
 function shutdown() {
+  closeViewerSessions();
   void Promise.allSettled([gatewayCaptions.stop(), supervisor.close()]).finally(() => server.close(() => store.close()));
 }
 process.once('SIGTERM', shutdown);

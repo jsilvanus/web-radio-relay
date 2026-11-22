@@ -536,3 +536,147 @@ test('internal hooks answer 503 when HOOK_SECRET is unset', async () => {
     extra.proc.kill();
   }
 });
+
+// --- viewer SSE (P7.5) --------------------------------------------------------
+
+/** Read SSE frames from a fetch response until aborted. Comments are skipped. */
+async function openSse(url) {
+  const ctl = new AbortController();
+  const res = await fetch(url, { signal: ctl.signal });
+  const frames = [];
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const pump = (async () => {
+    try {
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let cut;
+        while ((cut = buffer.indexOf('\n\n')) >= 0) {
+          const block = buffer.slice(0, cut);
+          buffer = buffer.slice(cut + 2);
+          const name = /^event: (.*)$/m.exec(block)?.[1];
+          const data = /^data: (.*)$/m.exec(block)?.[1];
+          if (name && data) frames.push({ event: name, data: JSON.parse(data) });
+        }
+      }
+    } catch { /* aborted */ }
+  })();
+  return { res, frames, close: () => ctl.abort(), pump };
+}
+
+async function waitUntil(pred, ms = 5000) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (pred()) return true;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return pred();
+}
+
+test('viewer: public, CORS *, no token needed, and the connected event arrives', async () => {
+  const sse = await openSse(`${base}/api/v1/viewer/viewerpub`);
+  try {
+    assert.equal(sse.res.status, 200);
+    assert.match(sse.res.headers.get('content-type'), /^text\/event-stream/);
+    assert.equal(sse.res.headers.get('access-control-allow-origin'), '*');
+    assert.equal(await waitUntil(() => sse.frames.some((f) => f.event === 'connected')), true);
+  } finally {
+    sse.close();
+  }
+});
+
+test('viewer: refuses a bad key and a bad mode with 400', async () => {
+  const badKey = await fetch(`${base}/api/v1/viewer/BAD%20KEY`);
+  assert.equal(badKey.status, 400);
+  const badMode = await fetch(`${base}/api/v1/viewer/viewerpub?mode=fast`);
+  assert.equal(badMode.status, 400);
+});
+
+test('viewer live: a pushed caption reaches the viewer at once, and a translation re-sends it', async () => {
+  const sse = await openSse(`${base}/api/v1/viewer/viewerlive?mode=live`);
+  try {
+    assert.equal(await waitUntil(() => sse.frames.some((f) => f.event === 'connected')), true);
+    const now = Date.now();
+    const push = await fetch(`${base}/api/v1/streams/viewerlive/events`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ events: [
+        { type: 'section', startedAt: now, payload: { title: 'Saarna' } },
+        { type: 'caption', lang: 'fi', startedAt: now, sourceKey: 'live-1', payload: { text: 'Hyvää huomenta' } },
+      ] }),
+    });
+    assert.equal(push.status, 202);
+    assert.equal(await waitUntil(() => sse.frames.some((f) => f.event === 'caption')), true);
+    const first = sse.frames.find((f) => f.event === 'caption').data;
+    assert.equal(first.text, 'Hyvää huomenta');
+    assert.equal(first.codes.section, 'Saarna');
+    assert.match(first.timestamp, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}$/);
+
+    const translated = await fetch(`${base}/api/v1/streams/viewerlive/events`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ events: [
+        { type: 'translation', lang: 'en', startedAt: now, sourceKey: 'live-1:en', payload: { text: 'Good morning', sourceKey: 'live-1' } },
+      ] }),
+    });
+    assert.equal(translated.status, 202);
+    assert.equal(await waitUntil(() => sse.frames.filter((f) => f.event === 'caption').length === 2), true);
+    const again = sse.frames.filter((f) => f.event === 'caption')[1].data;
+    assert.equal(again.sequence, first.sequence);
+    assert.deepEqual(again.translations, { en: 'Good morning' });
+    assert.equal(again.composedText, 'Hyvää huomenta<br>Good morning');
+  } finally {
+    sse.close();
+  }
+});
+
+test('viewer delayed: an event waits for the stream delay before it is sent', async () => {
+  const set = await fetch(`${base}/api/v1/streams/viewerdelay/delay`, {
+    method: 'PUT',
+    headers: auth,
+    body: JSON.stringify({ delaySeconds: 2 }),
+  });
+  assert.equal(set.status, 200);
+
+  const sse = await openSse(`${base}/api/v1/viewer/viewerdelay?mode=delayed`);
+  try {
+    assert.equal(await waitUntil(() => sse.frames.some((f) => f.event === 'connected')), true);
+    const startedAt = Date.now();
+    await fetch(`${base}/api/v1/streams/viewerdelay/events`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ events: [
+        { type: 'caption', lang: 'fi', startedAt, sourceKey: 'delay-1', payload: { text: 'Viivästetty' } },
+      ] }),
+    });
+    await new Promise((r) => setTimeout(r, 600));
+    assert.equal(sse.frames.some((f) => f.event === 'caption'), false, 'not released before startedAt + delay');
+    assert.equal(await waitUntil(() => sse.frames.some((f) => f.event === 'caption'), 4000), true);
+    assert.ok(Date.now() - startedAt >= 1900, 'released after about the delay');
+  } finally {
+    sse.close();
+  }
+});
+
+test('viewer: a viewer that connects mid-service gets the current state', async () => {
+  const now = Date.now();
+  await fetch(`${base}/api/v1/streams/viewerstate/events`, {
+    method: 'POST',
+    headers: auth,
+    body: JSON.stringify({ events: [
+      { type: 'graphic', startedAt: now - 3000, payload: { kind: 'hymn-verse', hymnNumber: '7', title: 'Virsi', verse: 1, lines: ['Ensimmäinen'] } },
+      { type: 'caption', lang: 'fi', startedAt: now - 1000, sourceKey: 'state-1', payload: { text: 'Juuri nyt' } },
+    ] }),
+  });
+  const sse = await openSse(`${base}/api/v1/viewer/viewerstate?mode=live`);
+  try {
+    assert.equal(await waitUntil(() => sse.frames.some((f) => f.event === 'caption')), true);
+    assert.equal(sse.frames.find((f) => f.event === 'graphic').data.hymnNumber, '7');
+    assert.equal(sse.frames.find((f) => f.event === 'caption').data.text, 'Juuri nyt');
+  } finally {
+    sse.close();
+  }
+});

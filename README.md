@@ -593,6 +593,10 @@ another `lang`.
 }
 ```
 
+### `GET /api/v1/viewer/{key}?mode=live|delayed`
+
+Public Server-Sent Events stream for viewer pages and the LCYT Android TV app (no token, `Access-Control-Allow-Origin: *`). The key is the stream name for now. `mode=live` (default) sends each timeline event as it is stored, for visitors in the building; `mode=delayed` releases events at `startedAt` plus the stream's listener delay, for remote listeners. Events: `connected`, `caption` (LCYT payload: `text`, `composedText`, `translations`, `codes.section`, `sequence`, `timestamp` without `Z`; a translation re-sends its caption with the same `sequence`), `section` and `graphic`. On connect the current section, graphic and caption are sent once. The payload builders are in `server/lib/viewer-payload.js`, the session in `server/lib/viewer-sse.js`.
+
 ### `GET /api/archive`
 
 Returns a list of archived recordings, newest first.

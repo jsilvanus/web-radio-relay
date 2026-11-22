@@ -1441,6 +1441,40 @@
         }
       }
     },
+    "/api/v1/viewer/{key}": {
+      "get": {
+        "operationId": "streamViewerEvents",
+        "summary": "LCYT-compatible viewer stream (SSE), public",
+        "description": "Server-Sent Events for viewer pages and the LCYT Android TV app. Public: no token, CORS Access-Control-Allow-Origin *, public rate limit. The key is the stream name for now. Events: connected { ok, stream, mode }; caption { text, composedText, translations, codes, sequence, timestamp } (timestamp is ISO without Z; a translation re-sends its caption with the same sequence and translations filled); section { id, timestamp, title, kind?, index? }; graphic { id, timestamp, kind, title?, text?, assetId?, hymnNumber?, verse?, lines? }. On connect the current section, graphic and caption are sent once. A comment line is sent every 25 s.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "description": "Viewer key: a stream name (a-z 0-9 _ - up to 32 characters).",
+            "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "description": "live (default): events are sent when stored. delayed: events are released at startedAt plus the stream's listener delay.",
+            "schema": { "type": "string", "enum": ["live", "delayed"], "default": "live" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event stream (text/event-stream)",
+            "content": { "text/event-stream": { "schema": { "type": "string" } } }
+          },
+          "400": {
+            "description": "Invalid key or mode",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
     "/api/v1/captions/source": {
       "get": {
         "operationId": "getCaptionSource",
