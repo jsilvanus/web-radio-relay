@@ -34,7 +34,7 @@ export const MIGRATIONS = [
     key_enc      TEXT,
     variant      TEXT,
     enabled      INTEGER NOT NULL DEFAULT 1,
-    start_with   INTEGER NOT NULL DEFAULT 0,
+    start_with   TEXT NOT NULL DEFAULT 'stream',
     created_at   INTEGER NOT NULL,
     UNIQUE (stream, name)
   );
