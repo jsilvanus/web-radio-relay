@@ -19,6 +19,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
         working-directory: .
+      - name: Install ffmpeg (real-ffmpeg tests)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        working-directory: .
       - run: pnpm test
 
   cli:
