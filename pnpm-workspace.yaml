@@ -1,0 +1,8 @@
+packages:
+  - server
+  - cli
+  - dev
+
+# esbuild (used by the dev Vite site) needs its install script, which npm ran before this switch.
+onlyBuiltDependencies:
+  - esbuild
