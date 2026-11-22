@@ -78,6 +78,29 @@ function spoolBytesOf(dir) {
 }
 
 /**
+ * Startup reconciliation: rows left in `recording`, `degraded` or `stopping` by a crash
+ * (the process died before it wrote a final state) are marked `interrupted`. Spool files
+ * are not touched and nothing is uploaded here; the segment count left in each session's
+ * spool directory is logged. Call once, before the recording service is used.
+ * @returns {Array<{ sessionId: string, stream: string, segments: number }>}
+ */
+export function reconcileInterruptedRecordings({ db, spoolDir, log = () => {} }) {
+  if (!db) throw new Error('reconcileInterruptedRecordings needs db');
+  const root = assertDirectory(spoolDir, 'spoolDir');
+  const rows = db
+    .prepare("SELECT id, stream FROM recordings WHERE state IN ('recording', 'degraded', 'stopping') ORDER BY started_at, id")
+    .all();
+  const result = [];
+  for (const row of rows) {
+    db.prepare("UPDATE recordings SET state = 'interrupted' WHERE id = ?").run(row.id);
+    const segments = listSegments(path.join(root, row.id)).length;
+    log(`[recording] ${row.stream} ${row.id}: interrupted by a restart, ${segments} segment(s) left in the spool`);
+    result.push({ sessionId: row.id, stream: row.stream, segments });
+  }
+  return result;
+}
+
+/**
  * @param {object} options
  * @param {object} options.db              open store database (store.js)
  * @param {object|null} options.s3         S3 client (s3.js); null = recording off (start answers 503)

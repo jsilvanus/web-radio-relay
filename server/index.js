@@ -44,8 +44,8 @@
  * Internal (not in openapi.json, not proxied by nginx):
  *   POST /internal/mediamtx/auth     MediaMTX authMethod http hook
  *   POST /internal/publish-auth      nginx-rtmp on_publish hook
- *   POST /internal/mediamtx/ready    MediaMTX runOnReady (starts the radio pull, probes the input)
- *   POST /internal/mediamtx/notready MediaMTX runOnNotReady (stops the radio pull)
+ *   POST /internal/mediamtx/ready    MediaMTX runOnReady (radio pull, probe, destinations, video HLS, recording)
+ *   POST /internal/mediamtx/notready MediaMTX runOnNotReady (stops all of them; the recording uploads the rest)
  *
  * Environment variables:
  *   PORT                     Port to listen on                          (default: 3000)
@@ -115,11 +115,13 @@ import { addEvents, rangeEvents, eventsAfterId, maxEventId } from './lib/event-s
 import { createEventBus, storeAndPublish } from './lib/event-bus.js';
 import { openViewerSession, closeViewerSessions, VIEWER_MODES } from './lib/viewer-sse.js';
 import { EgressSupervisor } from './lib/egress-supervisor.js';
-import { createRecordingService } from './lib/recording-service.js';
+import { createRecordingService, reconcileInterruptedRecordings } from './lib/recording-service.js';
 import { createRecordingRouter } from './lib/recording-routes.js';
+import { HlsPackager } from './lib/hls-packager.js';
+import { listSizeFor } from './lib/hls-args.js';
 import {
   DEFAULT_MAX_DESTINATIONS, createDestination, deleteDestination, destinationExists, listDestinations,
-  loadEgressTarget, updateDestination,
+  loadEgressTarget, startableDestinationIds, updateDestination,
 } from './lib/destinations.js';
 import { DEFAULT_RTSP_BASE } from './lib/ffmpeg-input.js';
 import { validateEventBatch } from './lib/events.js';
@@ -228,14 +230,6 @@ const probeService = createProbeService({
   urlFor: (name) => RADIO_SOURCE_URL_TEMPLATE.replaceAll('{name}', name),
   log: (msg) => console.log(`[probe] ${msg}`),
 });
-/** MediaMTX ready and notready hooks: start or stop the radio pull, probe the input. */
-const readyHooks = createReadyHandler({
-  supervisor, probe: probeService,
-  // RADIO_ON_READY=off wins; otherwise the stream's own `radio` setting decides (P8).
-  radioOnReady: (name) => RADIO_ON_READY && getConfig(db, name).radio,
-  log: (msg) => console.log(`[ready-hooks] ${msg}`),
-});
-
 /** Secret key (64 hex) that seals destination stream keys at rest. Unset = keys cannot be stored (503). */
 const RELAY_SECRET_KEY = process.env.RELAY_SECRET_KEY || '';
 /** Most destinations one stream may have (P4.1). */
@@ -265,6 +259,35 @@ const recordings = createRecordingService({
   rtspBase: process.env.MEDIAMTX_RTSP_BASE || DEFAULT_RTSP_BASE,
   spawnProcess: spawn,
   log: (msg) => console.log(msg),
+});
+// Rows a crash left in recording/degraded/stopping become interrupted; spool files stay on disk.
+reconcileInterruptedRecordings({ db, spoolDir: RECORDING_SPOOL_DIR, log: (msg) => console.log(msg) });
+
+/** Video HLS packager (P6.1): <HLS_DIR>/<stream>/video/, started by the ready hook when videoHls is on. */
+const hlsPackager = new HlsPackager({
+  hlsDir: HLS_DIR,
+  hlsTime: 4,
+  listSize: listSizeFor(DELAY_MAX_SECONDS, 4),
+  rtspBase: process.env.MEDIAMTX_RTSP_BASE || DEFAULT_RTSP_BASE,
+  spawnProcess: spawn,
+});
+
+/**
+ * MediaMTX ready and notready hooks: start or stop the radio pull, the stream's startable
+ * destinations, the video HLS packager and the recording. Each is independent (ready-hooks.js).
+ */
+const readyHooks = createReadyHandler({
+  supervisor, probe: probeService,
+  // RADIO_ON_READY=off wins; otherwise the stream's own `radio` setting decides (P8).
+  radioOnReady: (name) => RADIO_ON_READY && getConfig(db, name).radio,
+  log: (msg) => console.log(`[ready-hooks] ${msg}`),
+  egress,
+  listStartable: (name) => startableDestinationIds(db, name),
+  loadTarget: (name, id) => loadEgressTarget(db, name, id, { secretKey: RELAY_SECRET_KEY }),
+  hls: hlsPackager,
+  recordings,
+  s3Configured: Boolean(s3Client),
+  getConfig: (name) => getConfig(db, name),
 });
 
 /** Email provider: 'sendgrid' | 'mailgun' | '' (disabled) */
@@ -1416,7 +1439,7 @@ const server = app.listen(PORT, () => {
 
 function shutdown() {
   closeViewerSessions();
-  void Promise.allSettled([gatewayCaptions.stop(), supervisor.close(), egress.close(), recordings.close()]).finally(() => server.close(() => store.close()));
+  void Promise.allSettled([gatewayCaptions.stop(), supervisor.close(), egress.close(), hlsPackager.close(), recordings.close()]).finally(() => server.close(() => store.close()));
 }
 process.once('SIGTERM', shutdown);
 process.once('SIGINT', shutdown);

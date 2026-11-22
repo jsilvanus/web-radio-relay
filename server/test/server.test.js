@@ -576,16 +576,20 @@ test('ready/notready: valid secret; live paths answer 200, other and -cc paths a
   // RADIO_SOURCE_URL_TEMPLATE is empty in this server, so the start fails and is answered, not raised.
   const ready = await hook('ready', 'path=live/keskus', headers);
   assert.equal(ready.status, 200);
-  assert.deepEqual(await ready.json(), { action: 'error', stream: 'keskus' });
+  // The answer is the summary of every action (ready-hooks.js); with no HLS or recording configured those are ignored.
+  const failedRadio = { action: 'error', stream: 'keskus', radio: 'error', destinations: 0, hls: 'ignored', recording: 'ignored', failed: ['radio'] };
+  assert.deepEqual(await ready.json(), failedRadio);
   const viaQuery = await hook('ready', `path=live/keskus&secret=${HOOK_SECRET}`);
   assert.equal(viaQuery.status, 200);
-  assert.deepEqual(await viaQuery.json(), { action: 'error', stream: 'keskus' });
+  assert.deepEqual(await viaQuery.json(), failedRadio);
   assert.deepEqual(await (await hook('ready', 'path=other/keskus', headers)).json(), { action: 'ignored' });
   assert.deepEqual(await (await hook('ready', 'path=live/keskus-cc', headers)).json(), { action: 'ignored' });
   assert.deepEqual(await (await hook('ready', '', headers)).json(), { action: 'ignored' });
   const notready = await hook('notready', 'path=live/keskus', headers);
   assert.equal(notready.status, 200);
-  assert.deepEqual(await notready.json(), { action: 'stop', stream: 'keskus' });
+  assert.deepEqual(await notready.json(), {
+    action: 'stop', stream: 'keskus', radio: 'stop', destinations: 0, hls: 'ignored', recording: 'ignored', failed: [],
+  });
   assert.deepEqual(await (await hook('notready', 'path=live/keskus-cc', headers)).json(), { action: 'ignored' });
 });
 
@@ -761,7 +765,9 @@ test('config routes: GET and PUT per stream; the env token passes; no token is 4
     method: 'POST',
     headers: { 'x-hook-secret': HOOK_SECRET },
   });
-  assert.deepEqual(await ready.json(), { action: 'ignored', stream: 'cfgone' });
+  assert.deepEqual(await ready.json(), {
+    action: 'ignored', stream: 'cfgone', radio: 'ignored', destinations: 0, hls: 'ignored', recording: 'ignored', failed: [],
+  });
 });
 
 test('config routes: a control token works on its own stream only; a view token is 403', async () => {
