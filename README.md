@@ -470,6 +470,9 @@ Copy `.env.example` to `.env` and override only what you need.
 | `RELAY_API_TOKEN` | *(unset)* | Bearer token for the control API (`/api/v1/*`). Unset means those routes answer 503 (fail closed). Generate with `openssl rand -hex 32` |
 | `RELAY_DB_PATH` | `/var/lib/relay/relay.db` | SQLite database file (streams, tokens, destinations, recordings, events). The parent directory is created when missing. Compose mounts the `relay-data` volume at `/var/lib/relay`. Tests use `:memory:` |
 | `RELAY_SECRET_KEY` | *(unset)* | 64 hex chars, `openssl rand -hex 32`; encrypts destination stream keys at rest; never commit |
+| `HOOK_SECRET` | *(unset)* | Secret for the internal hooks (see "Internal hooks"). Unset means they answer 503 |
+| `PUBLISH_AUTH` | `off` | `on` makes nginx-rtmp publishes need a token with `stream:<name>:publish`; any other value allows all |
+| `RELAY_INTERNAL_CIDRS` | `172.16.0.0/12,10.0.0.0/8,127.0.0.0/8` | IPv4 networks whose MediaMTX reads need no token |
 | `DELAY_SECONDS` | `0` | Listener delay for audio and captions. Changeable at runtime with `PUT /api/v1/delay` |
 | `DELAY_MAX_SECONDS` | `60` | Upper bound for the delay (see `HLS_LIST_SIZE` above) |
 | `DEFAULT_STREAM` | `stream` | Stream used by the legacy routes without a name (`/api/status`, `/api/captions`) |
@@ -616,6 +619,13 @@ The admin token (`RELAY_API_TOKEN`) can issue narrower tokens, stored in SQLite 
 - `GET /api/v1/tokens` (admin) lists tokens without values; `DELETE /api/v1/tokens/{id}` (admin) revokes one (204, or 404 for an unknown id).
 - A token gets `401` when it is unknown, revoked or expired, and `403` when its scopes do not allow the route. The routes that exist today still accept only `RELAY_API_TOKEN`.
 - With `RELAY_API_TOKEN` unset and no stored token, the scoped checks answer `503`, as before.
+
+### Internal hooks
+
+Used by MediaMTX and nginx-rtmp, not by clients. They are not in `openapi.json`, and nginx answers `404` for `/internal/` on the public port, so they are reachable from the Docker network only. Both need `HOOK_SECRET` (`?secret=` or `x-hook-secret`): `503` when it is unset, `401` when it is wrong.
+
+- `POST /internal/mediamtx/auth` (MediaMTX `authMethod: http`): `200` to allow, `401` to deny. Publish needs a token with `stream:<name>:publish` (query `token=` or the password). A `live/<name>-cc` path (the captioner) needs `secret=<HOOK_SECRET>`. Reads from an address in `RELAY_INTERNAL_CIDRS` are allowed; other reads need a token with `stream:<name>:view`. The `api` and `metrics` actions are denied.
+- `POST /internal/publish-auth` (nginx-rtmp `on_publish`, form body): `200` to allow, `403` when the token is missing or lacks the scope. With `PUBLISH_AUTH` off (default) it always answers `200`. nginx cannot read env, so `nginx/nginx.conf` carries a `__HOOK_SECRET__` placeholder that must be replaced with `HOOK_SECRET` before nginx starts.
 
 ### Listener page (`/listen`)
 

@@ -15,6 +15,7 @@ import { createToken } from '../lib/tokens.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const TOKEN = 'test-token-123';
+const HOOK_SECRET = 'hook-secret-test-456';
 const PORT = 31000 + Math.floor(Math.random() * 2000);
 const base = `http://127.0.0.1:${PORT}`;
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tuberadio-'));
@@ -65,6 +66,8 @@ before(async () => {
       STATS_FILE: path.join(dir, 'stats.json'),
       RELAY_API_TOKEN: TOKEN,
       METRICS_BEARER_TOKEN: 'metrics-token',
+      HOOK_SECRET: HOOK_SECRET,
+      PUBLISH_AUTH: 'off',
       DELAY_SECONDS: '8',
       DELAY_MAX_SECONDS: '30',
       RELAY_DB_PATH: dbPath,
@@ -354,4 +357,141 @@ test('old control routes keep the env token only; stored tokens do not open them
   assert.equal((await fetch(`${base}/api/v1/delay`, { headers: auth })).status, 200);
   assert.equal((await fetch(`${base}/api/v1/delay`, { headers: withToken(phone.token) })).status, 401);
   assert.equal((await fetch(`${base}/api/v1/delay`, { headers: withToken(admin.token) })).status, 401);
+});
+
+// --- internal hooks (P2.3 / P3.2) ---------------------------------------------
+
+const form = (fields) => new URLSearchParams(fields).toString();
+const formHeaders = { 'Content-Type': 'application/x-www-form-urlencoded' };
+const mediamtx = (body, headers = {}) =>
+  fetch(`${base}/internal/mediamtx/auth`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: json(body),
+  });
+
+/** Starts another API process on `port` with the given env; resolves once it answers. */
+async function startExtra(port, env) {
+  const extraDir = fs.mkdtempSync(path.join(dir, 'extra-'));
+  const proc = spawn(process.execPath, [path.join(here, '..', 'index.js')], {
+    env: {
+      ...process.env,
+      PORT: String(port),
+      HLS_DIR: hls,
+      ARCHIVE_DIR: path.join(extraDir, 'archive'),
+      HIDDEN_ARCHIVE_DIR: path.join(extraDir, 'hidden'),
+      STATS_FILE: path.join(extraDir, 'stats.json'),
+      RELAY_API_TOKEN: TOKEN,
+      METRICS_BEARER_TOKEN: 'metrics-token',
+      RELAY_DB_PATH: path.join(extraDir, 'relay.db'),
+      HOOK_SECRET: '',
+      PUBLISH_AUTH: '',
+      ...env,
+    },
+    stdio: 'ignore',
+  });
+  const url = `http://127.0.0.1:${port}`;
+  for (let i = 0; i < 100; i++) {
+    try {
+      if ((await fetch(`${url}/api/status`)).ok) return { url, proc };
+    } catch { /* not up yet */ }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  proc.kill();
+  throw new Error('extra server did not start');
+}
+
+test('internal hooks: missing or wrong secret is 401 (both answer styles)', async () => {
+  const body = { action: 'publish', path: 'live/keskus', query: '' };
+  assert.equal((await mediamtx(body)).status, 401);
+  assert.equal((await mediamtx(body, { 'x-hook-secret': 'wrong' })).status, 401);
+  const wrongQuery = await fetch(`${base}/internal/mediamtx/auth?secret=wrong`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: json(body),
+  });
+  assert.equal(wrongQuery.status, 401);
+  const noSecret = await fetch(`${base}/internal/publish-auth`, { method: 'POST', headers: formHeaders, body: form({ name: 'keskus' }) });
+  assert.equal(noSecret.status, 200, 'PUBLISH_AUTH is off: publishes are allowed without the secret');
+});
+
+test('mediamtx hook: publish with a stored token, reads from inside, captioner path, other actions', async () => {
+  const publish = await mediamtx({ action: 'publish', path: 'live/keskus', query: `token=${phone.token}` }, { 'x-hook-secret': HOOK_SECRET });
+  assert.equal(publish.status, 200);
+  assert.equal((await publish.json()).allow, true);
+  assert.equal((await mediamtx({ action: 'publish', path: 'live/keskus', password: phone.token }, { 'x-hook-secret': HOOK_SECRET })).status, 200);
+  assert.equal((await mediamtx({ action: 'publish', path: 'live/keskus', query: '' }, { 'x-hook-secret': HOOK_SECRET })).status, 401);
+  assert.equal((await mediamtx({ action: 'publish', path: 'live/other', query: `token=${phone.token}` }, { 'x-hook-secret': HOOK_SECRET })).status, 401);
+  assert.equal((await mediamtx({ action: 'read', path: 'live/keskus', ip: '172.17.0.4' }, { 'x-hook-secret': HOOK_SECRET })).status, 200);
+  assert.equal((await mediamtx({ action: 'read', path: 'live/keskus', ip: '203.0.113.9' }, { 'x-hook-secret': HOOK_SECRET })).status, 401);
+  assert.equal((await mediamtx({ action: 'api', path: 'live/keskus', ip: '172.17.0.4' }, { 'x-hook-secret': HOOK_SECRET })).status, 401);
+  assert.equal((await mediamtx({ action: 'publish', path: 'live/keskus-cc', query: `secret=${HOOK_SECRET}` }, { 'x-hook-secret': HOOK_SECRET })).status, 200);
+  assert.equal((await mediamtx({ action: 'publish', path: 'live/keskus-cc', query: '' }, { 'x-hook-secret': HOOK_SECRET })).status, 401);
+  const denied = await (await mediamtx({ action: 'publish', path: 'live/keskus', query: 'token=nope' }, { 'x-hook-secret': HOOK_SECRET })).text();
+  assert.ok(!denied.includes('nope'), 'a deny body never echoes the token');
+});
+
+test('publish-auth: with PUBLISH_AUTH off every publish is allowed', async () => {
+  const withBadToken = await fetch(`${base}/internal/publish-auth?secret=wrong`, {
+    method: 'POST',
+    headers: formHeaders,
+    body: form({ name: 'keskus', args: 'token=nope', addr: '203.0.113.9' }),
+  });
+  assert.equal(withBadToken.status, 200);
+});
+
+test('publish-auth: with PUBLISH_AUTH on, token scope decides (403), a bad secret is 401', async () => {
+  const dbPath2 = path.join(dir, 'publish-on.db');
+  const store2 = openStore(dbPath2);
+  let good, other;
+  try {
+    good = createToken(store2.db, { scopes: ['stream:keskus:publish'] }, Date.now());
+    other = createToken(store2.db, { scopes: ['stream:other:publish'] }, Date.now());
+  } finally {
+    store2.close();
+  }
+  const port = PORT + 1;
+  const extra = await startExtra(port, { HOOK_SECRET: 'extra-hook-secret', PUBLISH_AUTH: 'on', RELAY_DB_PATH: dbPath2 });
+  try {
+    const hook = (secret, args, name = 'keskus') =>
+      fetch(`${extra.url}/internal/publish-auth?secret=${secret}`, {
+        method: 'POST',
+        headers: formHeaders,
+        body: form({ name, args, addr: '203.0.113.9' }),
+      });
+    assert.equal((await hook('extra-hook-secret', `token=${good.token}`)).status, 200);
+    assert.equal((await hook('extra-hook-secret', `token=${other.token}`)).status, 403);
+    assert.equal((await hook('extra-hook-secret', '')).status, 403);
+    assert.equal((await hook('extra-hook-secret', 'token=nope')).status, 403);
+    assert.equal((await hook('wrong', `token=${good.token}`)).status, 401);
+    const viaMediamtx = await fetch(`${extra.url}/internal/mediamtx/auth`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-hook-secret': 'extra-hook-secret' },
+      body: json({ action: 'publish', path: 'live/keskus', query: `token=${good.token}` }),
+    });
+    assert.equal(viaMediamtx.status, 200);
+  } finally {
+    extra.proc.kill();
+  }
+});
+
+test('internal hooks answer 503 when HOOK_SECRET is unset', async () => {
+  const port = PORT + 2;
+  const extra = await startExtra(port, { PUBLISH_AUTH: 'on' });
+  try {
+    const mtx = await fetch(`${extra.url}/internal/mediamtx/auth`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-hook-secret': 'anything' },
+      body: json({ action: 'read', path: 'live/keskus', ip: '172.17.0.4' }),
+    });
+    assert.equal(mtx.status, 503);
+    const pub = await fetch(`${extra.url}/internal/publish-auth?secret=anything`, {
+      method: 'POST',
+      headers: formHeaders,
+      body: form({ name: 'keskus', args: 'token=x' }),
+    });
+    assert.equal(pub.status, 503);
+  } finally {
+    extra.proc.kill();
+  }
 });

@@ -21,9 +21,16 @@
  *   GET  /api/v1/tokens              admin: list tokens (never the values)
  *   DELETE /api/v1/tokens/:id        admin: revoke a token
  *
+ * Internal (not in openapi.json, not proxied by nginx):
+ *   POST /internal/mediamtx/auth     MediaMTX authMethod http hook
+ *   POST /internal/publish-auth      nginx-rtmp on_publish hook
+ *
  * Environment variables:
  *   PORT                     Port to listen on                          (default: 3000)
  *   RELAY_API_TOKEN          Bearer token for /api/v1 (unset = control API answers 503 unless a stored token exists)
+ *   HOOK_SECRET              Secret for the /internal hooks (?secret= or x-hook-secret); unset = hooks answer 503
+ *   PUBLISH_AUTH             "on" makes /internal/publish-auth check tokens; anything else allows all (default: off)
+ *   RELAY_INTERNAL_CIDRS     IPv4 CIDRs whose reads need no token (default: 172.16.0.0/12,10.0.0.0/8,127.0.0.0/8)
  *   RELAY_DB_PATH            SQLite database file (default: /var/lib/relay/relay.db)
  *   DELAY_SECONDS            Listener delay for audio and captions     (default: 0)
  *   DELAY_MAX_SECONDS        Largest delay the API accepts; sizes the ffmpeg playlist (default: 60)
@@ -56,9 +63,10 @@ import fs from 'fs';
 import path from 'path';
 import https from 'https';
 import { fileURLToPath } from 'url';
-import { requireBearer, requireScope } from './lib/auth.js';
+import { requireBearer, requireScope, tokensEqual } from './lib/auth.js';
 import { openStore } from './lib/store.js';
-import { createToken, listTokens, revokeToken, validateTokenRequest } from './lib/tokens.js';
+import { createToken, findTokenByValue, listTokens, revokeToken, validateTokenRequest } from './lib/tokens.js';
+import { decide } from './lib/mediamtx-auth.js';
 import { buildDelayedPlaylist } from './lib/hls-delay.js';
 import { validateCaptionBody } from './lib/captions.js';
 import { isValidStreamName, StreamRegistry } from './lib/streams.js';
@@ -88,6 +96,14 @@ const STATS_FILE = process.env.STATS_FILE || '/var/www/radio/stats/stats.json';
 const STATS_SESSION_DAYS = Number(process.env.STATS_SESSION_DAYS) || 90;
 /** Bearer token for the control API (/api/v1). Unset = control routes answer 503. */
 const RELAY_API_TOKEN = process.env.RELAY_API_TOKEN || '';
+/** Secret for /internal/* hooks. Also the internal secret that `-cc` captioner publishes must present. */
+const HOOK_SECRET = process.env.HOOK_SECRET || '';
+/** When not "on", /internal/publish-auth answers 200 for every publish (default). */
+const PUBLISH_AUTH_ON = process.env.PUBLISH_AUTH === 'on';
+const RELAY_INTERNAL_CIDRS = (process.env.RELAY_INTERNAL_CIDRS || '172.16.0.0/12,10.0.0.0/8,127.0.0.0/8')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 /** SQLite store: streams, scoped tokens, destinations, recordings, events */
 const store = openStore();
 const db = store.db;
@@ -702,6 +718,66 @@ app.delete('/api/v1/tokens/:id', requireAdmin, (req, res) => {
     return;
   }
   res.status(204).end();
+});
+
+// ---------------------------------------------------------------------------
+// Internal hooks (MediaMTX and nginx-rtmp). nginx answers 404 for /internal/
+// from the public side; these are reached on the Docker network only.
+// ---------------------------------------------------------------------------
+
+/**
+ * Checks the hook secret given as `?secret=` or `x-hook-secret`. Returns null
+ * when it matches, else the status to answer: 503 (HOOK_SECRET unset) or 401.
+ */
+function hookSecretStatus(req) {
+  if (!HOOK_SECRET) return 503;
+  const given = [req.query.secret, req.get('x-hook-secret')].filter((v) => typeof v === 'string' && v.length > 0);
+  return given.some((g) => tokensEqual(g, HOOK_SECRET)) ? null : 401;
+}
+
+const lookupStoredToken = (token) => findTokenByValue(db, token);
+
+app.post('/internal/mediamtx/auth', (req, res) => {
+  const status = hookSecretStatus(req);
+  if (status) {
+    res.status(status).json({ error: status === 503 ? 'HOOK_SECRET is not set' : 'Unauthorized' });
+    return;
+  }
+  const body = req.body || {};
+  const result = decide(
+    {
+      action: body.action,
+      path: body.path,
+      query: body.query,
+      user: body.user,
+      password: body.password,
+      ip: body.ip,
+      protocol: body.protocol,
+    },
+    { lookupToken: lookupStoredToken, internalSecret: HOOK_SECRET, internalCidrs: RELAY_INTERNAL_CIDRS, nowMs: Date.now() },
+  );
+  res.status(result.allow ? 200 : 401).json(result);
+});
+
+// nginx-rtmp posts a form body (name, args, addr, ...). With PUBLISH_AUTH off,
+// every publish is allowed and the secret is not checked.
+app.post('/internal/publish-auth', express.urlencoded({ extended: false, limit: '16kb' }), (req, res) => {
+  if (!PUBLISH_AUTH_ON) {
+    res.status(200).end();
+    return;
+  }
+  const status = hookSecretStatus(req);
+  if (status) {
+    res.status(status).end();
+    return;
+  }
+  const body = req.body || {};
+  const name = typeof body.name === 'string' ? body.name : '';
+  const result = decide(
+    { action: 'publish', path: `live/${name}`, query: typeof body.args === 'string' ? body.args : '', ip: body.addr, protocol: 'rtmp' },
+    { lookupToken: lookupStoredToken, internalSecret: HOOK_SECRET, internalCidrs: RELAY_INTERNAL_CIDRS, nowMs: Date.now() },
+  );
+  res.status(result.allow ? 200 : 403).end();
 });
 
 app.get('/api/archive', (_req, res) => {
