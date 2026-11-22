@@ -62,6 +62,9 @@ export const MIGRATIONS = [
   );
   CREATE INDEX events_stream_started_at ON events (stream, started_at);
   `,
+  `
+  ALTER TABLE tokens ADD COLUMN label TEXT;
+  `,
 ];
 
 // Applies every migration above the stored schema version. Throws (after a

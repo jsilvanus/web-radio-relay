@@ -22,12 +22,22 @@ function tempDir() {
   return mkdtempSync(join(tmpdir(), 'relay-store-'));
 }
 
-test('in-memory store creates all tables at version 1', () => {
+test('in-memory store creates all tables at the latest version', () => {
   const { db, close } = openStore(':memory:');
   try {
     assert.deepEqual(tableNames(db), TABLES);
     assert.deepEqual(version(db), [MIGRATIONS.length]);
-    assert.equal(MIGRATIONS.length, 1);
+    assert.equal(MIGRATIONS.length, 2);
+  } finally {
+    close();
+  }
+});
+
+test('tokens table has a label column (migration 2)', () => {
+  const { db, close } = openStore(':memory:');
+  try {
+    const cols = db.prepare('PRAGMA table_info(tokens)').all().map((c) => c.name);
+    assert.ok(cols.includes('label'));
   } finally {
     close();
   }
@@ -53,7 +63,7 @@ test('opening a file store twice runs migrations once', () => {
 
     const second = openStore(path);
     try {
-      assert.deepEqual(version(second.db), [1]);
+      assert.deepEqual(version(second.db), [MIGRATIONS.length]);
       assert.deepEqual(tableNames(second.db), TABLES);
       const row = second.db.prepare('SELECT name FROM streams').get();
       assert.equal(row.name, 'keskus');
@@ -87,7 +97,7 @@ test('openStore without a path uses RELAY_DB_PATH', () => {
   try {
     const { db, close } = openStore();
     try {
-      assert.deepEqual(version(db), [1]);
+      assert.deepEqual(version(db), [MIGRATIONS.length]);
     } finally {
       close();
     }
@@ -106,7 +116,7 @@ test('a failing migration rolls back its own changes and keeps the old version',
       'CREATE TABLE half_done (a INTEGER); SELECT * FROM no_such_table;',
     ];
     assert.throws(() => migrate(db, broken), /no such table/);
-    assert.deepEqual(version(db), [1]);
+    assert.deepEqual(version(db), [MIGRATIONS.length]);
     assert.ok(!tableNames(db).includes('half_done'));
   } finally {
     close();
@@ -118,7 +128,7 @@ test('migrate applies only the migrations above the stored version', () => {
   try {
     const extra = [...MIGRATIONS, 'CREATE TABLE extra (id INTEGER PRIMARY KEY);'];
     migrate(db, extra);
-    assert.deepEqual(version(db), [2]);
+    assert.deepEqual(version(db), [MIGRATIONS.length + 1]);
     assert.ok(tableNames(db).includes('extra'));
   } finally {
     close();
