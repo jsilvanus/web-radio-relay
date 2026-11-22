@@ -37,6 +37,9 @@
  *   POST   /api/v1/streams/{s}/destinations/{id}/stop  stop one egress child
  *   GET  /api/v1/streams/{s}/config  per-stream config (scope stream:<s>:control)
  *   PUT  /api/v1/streams/{s}/config  set part of it: visibleLanguages, radio, videoHls, recordOnLive, publicGraphics, viewerKey
+ *   POST   /api/v1/streams/{s}/recordings             start recording the stream to S3 (202, needs S3)
+ *   DELETE /api/v1/streams/{s}/recordings/current     stop it: uploads the rest, writes session.json
+ *   GET    /api/v1/streams/{s}/recordings             recordings of the stream from the database
  *
  * Internal (not in openapi.json, not proxied by nginx):
  *   POST /internal/mediamtx/auth     MediaMTX authMethod http hook
@@ -55,6 +58,8 @@
  *   RELAY_DB_PATH            SQLite database file (default: /var/lib/relay/relay.db)
  *   ASSET_DIR                Image asset directory when S3 is unset     (default: /var/lib/relay/assets)
  *   S3_ENDPOINT, S3_BUCKET   Store image assets in S3 (see README)      (default: unset = local ASSET_DIR)
+ *   RECORDING_SPOOL_DIR      Local spool for recorder segments           (default: /var/lib/relay/spool)
+ *   RECORDING_SPOOL_MAX_BYTES  Spool size above which recordings are degraded (default: 2 GiB)
  *   DELAY_SECONDS            Listener delay for audio and captions     (default: 0)
  *   DELAY_MAX_SECONDS        Largest delay the API accepts; sizes the ffmpeg playlist (default: 60)
  *   HLS_SEGMENT_PREFIX       URL prefix of segment files in playlists  (default: /hls/)
@@ -110,6 +115,8 @@ import { addEvents, rangeEvents, eventsAfterId, maxEventId } from './lib/event-s
 import { createEventBus, storeAndPublish } from './lib/event-bus.js';
 import { openViewerSession, closeViewerSessions, VIEWER_MODES } from './lib/viewer-sse.js';
 import { EgressSupervisor } from './lib/egress-supervisor.js';
+import { createRecordingService } from './lib/recording-service.js';
+import { createRecordingRouter } from './lib/recording-routes.js';
 import {
   DEFAULT_MAX_DESTINATIONS, createDestination, deleteDestination, destinationExists, listDestinations,
   loadEgressTarget, updateDestination,
@@ -156,7 +163,9 @@ const db = store.db;
 /** Directory for image assets when S3 is not configured (S3 wins when S3_ENDPOINT and S3_BUCKET are set) */
 const ASSET_DIR = process.env.ASSET_DIR || '/var/lib/relay/assets';
 const s3Config = s3ConfigFromEnv(process.env);
-const assetStore = createAssetStore({ s3: s3Config ? createS3Client(s3Config) : null, dir: ASSET_DIR });
+/** One S3 client for assets and recordings; null when S3 is not configured. */
+const s3Client = s3Config ? createS3Client(s3Config) : null;
+const assetStore = createAssetStore({ s3: s3Client, dir: ASSET_DIR });
 
 /** Stream used by the legacy routes (/api/status, /api/captions, /api/hls/...) */
 const DEFAULT_STREAM = process.env.DEFAULT_STREAM || 'stream';
@@ -238,6 +247,24 @@ const MAX_DESTINATIONS_PER_STREAM = (() => {
 const egress = new EgressSupervisor({
   rtspBase: process.env.MEDIAMTX_RTSP_BASE || DEFAULT_RTSP_BASE,
   spawnProcess: spawn,
+});
+
+/** Local spool of the recorder segments (P5.3); each closed segment is uploaded to S3 and removed from here. */
+const RECORDING_SPOOL_DIR = process.env.RECORDING_SPOOL_DIR || '/var/lib/relay/spool';
+/** Spool size above which recordings are marked degraded (nothing unuploaded is deleted). */
+const RECORDING_SPOOL_MAX_BYTES = (() => {
+  const n = Number(process.env.RECORDING_SPOOL_MAX_BYTES);
+  return Number.isInteger(n) && n > 0 ? n : 2 * 1024 ** 3;
+})();
+/** Recorders for S3 recordings; start answers 503 when S3 is not configured. */
+const recordings = createRecordingService({
+  db,
+  s3: s3Client,
+  spoolDir: RECORDING_SPOOL_DIR,
+  spoolMaxBytes: RECORDING_SPOOL_MAX_BYTES,
+  rtspBase: process.env.MEDIAMTX_RTSP_BASE || DEFAULT_RTSP_BASE,
+  spawnProcess: spawn,
+  log: (msg) => console.log(msg),
 });
 
 /** Email provider: 'sendgrid' | 'mailgun' | '' (disabled) */
@@ -743,6 +770,11 @@ app.post('/api/v1/streams/:name/destinations/:id/stop', requireStreamControl, st
   }
   res.json({ id: req.params.id, state: egress.stop(req.stream, req.params.id) });
 }));
+
+// ---------------------------------------------------------------------------
+// Recordings to S3 (P5.3). Scope stream:<name>:control (admin passes).
+// ---------------------------------------------------------------------------
+app.use(createRecordingRouter({ service: recordings, adminToken: RELAY_API_TOKEN, db }));
 
 // ---------------------------------------------------------------------------
 // GET /api/streams — every stream the relay knows about
@@ -1384,7 +1416,7 @@ const server = app.listen(PORT, () => {
 
 function shutdown() {
   closeViewerSessions();
-  void Promise.allSettled([gatewayCaptions.stop(), supervisor.close(), egress.close()]).finally(() => server.close(() => store.close()));
+  void Promise.allSettled([gatewayCaptions.stop(), supervisor.close(), egress.close(), recordings.close()]).finally(() => server.close(() => store.close()));
 }
 process.once('SIGTERM', shutdown);
 process.once('SIGINT', shutdown);
