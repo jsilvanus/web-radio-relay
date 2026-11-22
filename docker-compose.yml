@@ -62,6 +62,7 @@ services:
       - radio-hidden-archive:/var/www/radio/hidden_archive
       - radio-stats:/var/www/radio/stats
       - radio-logs:/var/log/tuberadio
+      - relay-data:/var/lib/relay
 
 volumes:
   radio-hls:
@@ -69,3 +70,4 @@ volumes:
   radio-hidden-archive:
   radio-logs:
   radio-stats:
+  relay-data:
