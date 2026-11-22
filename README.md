@@ -734,7 +734,18 @@ With `S3_ENDPOINT` and `S3_BUCKET` set, images go to `assets/<assetId>` in the b
 
 ### Listener page (`/listen`)
 
-`GET /listen` serves a page with the delayed audio, a play button, a language choice (fi, sv, en or all) and captions shown as the relay releases them. The page is one HTML file (`server/public/listen.html`) that loads hls.js from cdnjs. Safari plays the HLS stream natively. Open it with `?lang=sv` to start in Swedish.
+`GET /listen` serves a page with the delayed audio, a play button, a language choice (fi, sv, en or all) and captions shown as the relay releases them. The page is one HTML file (`server/public/listen.html`) that loads hls.js from cdnjs. Safari plays the HLS stream natively. Open it with `?lang=sv` to start in Swedish. The section heading and the hymn or picture panel come from the delayed viewer stream (`/api/v1/viewer/{key}?mode=delayed`).
+
+### Viewer pages
+
+| Route | Page |
+|---|---|
+| `GET /view/{key}` | Church visitors' page: live captions (no delay), section heading, hymn panel, picture panel. Query: `theme=dark\|light`, `fontsize=<rem>`, `lang=<code>\|original\|all` |
+| `GET /embed/viewer?key={key}` | Caption-only overlay for an iframe. Query: `theme`, `fontsize`, `lang`, `bg=transparent` |
+| `GET /watch?stream={s}` | Delayed video (hls.js on `/api/streams/{s}/hls/master.m3u8`) with the viewer panels beside it |
+| `GET /viewer/*` | Static assets of the pages (`viewer-app.js`, `viewer-utils.js`, `viewer.css`), cached five minutes |
+
+The key is a stream name (`a-z 0-9 _ -`, up to 32 characters); anything else answers 404. The church page is the one for phones in the building: big caption text, the chosen language kept in the browser (`localStorage`), and the screen kept awake with the Wake Lock API where the browser has it. It reads the same public SSE as the LCYT viewer, so the text and the translations match what LCYT shows. The pages are plain ES modules with no build step; event text is only ever put on the page with `textContent`.
 
 ### Remote CLI
 

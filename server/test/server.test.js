@@ -192,6 +192,24 @@ test('listener page is served and loads hls.js and the caption feed', async () =
   assert.match(html, /\/api\/streams\//);
 });
 
+test('viewer pages and their assets are served; bad keys get 404', async () => {
+  const pages = [
+    ['/view/stream', /text\/html/],
+    ['/embed/viewer?key=stream', /text\/html/],
+    ['/watch?stream=stream', /text\/html/],
+    ['/viewer/viewer-utils.js', /javascript/],
+    ['/viewer/viewer.css', /text\/css/],
+  ];
+  for (const [path, type] of pages) {
+    const res = await fetch(`${base}${path}`, { redirect: 'manual' });
+    assert.equal(res.status, 200, path);
+    assert.match(res.headers.get('content-type'), type, path);
+  }
+  assert.equal((await fetch(`${base}/view/BAD!`)).status, 404);
+  assert.equal((await fetch(`${base}/embed/viewer`)).status, 404);
+  assert.equal((await fetch(`${base}/watch?stream=BAD!`)).status, 404);
+});
+
 test('root and named stream paths redirect to listener page', async () => {
   const root = await fetch(`${base}/`, { redirect: 'manual' });
   assert.equal(root.status, 302);
