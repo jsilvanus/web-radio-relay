@@ -233,6 +233,21 @@ export const operations = [
     ]
   },
   {
+    "operationId": "publishStreamEvents",
+    "method": "POST",
+    "path": "/api/v1/streams/{name}/events",
+    "summary": "Push timeline events for one stream (batch)",
+    "bearer": true,
+    "body": "application/json",
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
     "operationId": "getStreamDelay",
     "method": "GET",
     "path": "/api/v1/streams/{name}/delay",

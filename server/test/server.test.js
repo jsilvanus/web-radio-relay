@@ -64,6 +64,7 @@ before(async () => {
       HIDDEN_ARCHIVE_DIR: path.join(dir, 'hidden'),
       STATS_FILE: path.join(dir, 'stats.json'),
       RELAY_API_TOKEN: TOKEN,
+      RELAY_DB_PATH: ':memory:',
       METRICS_BEARER_TOKEN: 'metrics-token',
       DELAY_SECONDS: '8',
       DELAY_MAX_SECONDS: '30',
@@ -256,6 +257,46 @@ test('caption source status is token protected and reports disabled when no gate
   const body = await (await fetch(`${base}/api/v1/captions/source`, { headers: auth })).json();
   assert.equal(body.captionSource.configured, false);
   assert.equal(body.captionSource.connected, false);
+  assert.deepEqual(body.captionSource.mapper, { mapped: 0, rejected: 0, unknown: 0 });
+});
+
+test('event push: a valid batch is accepted with added and deduped counts', async () => {
+  const now = Date.now();
+  const events = [
+    { type: 'section', startedAt: now, payload: { title: 'Saarna', index: 2 }, sourceKey: 'push-sec-1' },
+    { type: 'marker', startedAt: now, payload: { label: 'Kohta A' } },
+    { type: 'data', startedAt: now, payload: { name: 'virsi', value: { n: 12 } } },
+  ];
+  const first = await fetch(`${base}/api/v1/streams/stream/events`, { method: 'POST', headers: auth, body: JSON.stringify({ events }) });
+  assert.equal(first.status, 202);
+  assert.deepEqual(await first.json(), { added: 3, deduped: 0 });
+
+  const again = await fetch(`${base}/api/v1/streams/stream/events`, { method: 'POST', headers: auth, body: JSON.stringify({ events: [events[0]] }) });
+  assert.equal(again.status, 202);
+  assert.deepEqual(await again.json(), { added: 0, deduped: 1 });
+});
+
+test('event push: one invalid event rejects the batch and the message names its index', async () => {
+  const now = Date.now();
+  const res = await fetch(`${base}/api/v1/streams/stream/events`, {
+    method: 'POST',
+    headers: auth,
+    body: JSON.stringify({ events: [
+      { type: 'marker', startedAt: now, payload: { label: 'ok' } },
+      { type: 'graphic', startedAt: now, payload: { kind: 'fireworks' } },
+    ] }),
+  });
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.match(body.error, /^events\[1\]: /);
+});
+
+test('event push: refuses a missing token and a bad stream name', async () => {
+  const body = JSON.stringify({ events: [{ type: 'marker', startedAt: Date.now(), payload: { label: 'x' } }] });
+  const noToken = await fetch(`${base}/api/v1/streams/stream/events`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+  assert.equal(noToken.status, 401);
+  const badName = await fetch(`${base}/api/v1/streams/BAD%20NAME/events`, { method: 'POST', headers: auth, body });
+  assert.equal(badName.status, 400);
 });
 
 // --- scoped tokens (P2.2) ---------------------------------------------------
