@@ -35,6 +35,8 @@
  *   DELETE /api/v1/streams/{s}/destinations/{id}       remove a destination (stops its egress)
  *   POST   /api/v1/streams/{s}/destinations/{id}/start start one egress child
  *   POST   /api/v1/streams/{s}/destinations/{id}/stop  stop one egress child
+ *   GET  /api/v1/streams/{s}/config  per-stream config (scope stream:<s>:control)
+ *   PUT  /api/v1/streams/{s}/config  set part of it: visibleLanguages, radio, videoHls, recordOnLive, publicGraphics, viewerKey
  *
  * Internal (not in openapi.json, not proxied by nginx):
  *   POST /internal/mediamtx/auth     MediaMTX authMethod http hook
@@ -104,7 +106,7 @@ import { createReadyHandler } from './lib/ready-hooks.js';
 import { createProbeService } from './lib/probe-service.js';
 import { GatewayCaptions } from './lib/gateway-captions.js';
 import { createGatewayMapper } from './lib/gateway-map.js';
-import { addEvents, rangeEvents } from './lib/event-store.js';
+import { addEvents, rangeEvents, eventsAfterId, maxEventId } from './lib/event-store.js';
 import { createEventBus, storeAndPublish } from './lib/event-bus.js';
 import { openViewerSession, closeViewerSessions, VIEWER_MODES } from './lib/viewer-sse.js';
 import { EgressSupervisor } from './lib/egress-supervisor.js';
@@ -114,6 +116,8 @@ import {
 } from './lib/destinations.js';
 import { DEFAULT_RTSP_BASE } from './lib/ffmpeg-input.js';
 import { validateEventBatch } from './lib/events.js';
+import { getConfig, putConfig, resolveViewerStream, StreamConfigError, VIEWER_KEY } from './lib/stream-config.js';
+import { createLateCounter, markLateTranslations } from './lib/translation-ingest.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -171,6 +175,21 @@ const streams = new StreamRegistry({
 });
 /** In-process fan-out of stored timeline events to the viewer SSE (P7.5) */
 const eventBus = createEventBus();
+/** Translations stored after their release time (P8), per stream; exposed in /metrics. */
+const lateTranslations = createLateCounter();
+/**
+ * Store timeline events of one stream and publish them (gateway pull and push route). A translation that
+ * arrived after startedAt + the stream's current delay is stored with payload.late and counted (P8).
+ */
+function storeStreamEvents(stream, events, nowMs) {
+  markLateTranslations(events, { delayMs: streams.delayOf(stream) * 1000, nowMs });
+  const before = maxEventId(db);
+  const result = storeAndPublish(db, eventBus, stream, events, nowMs);
+  if (result.added > 0) {
+    lateTranslations.add(stream, eventsAfterId(db, stream, before).filter((r) => r.type === 'translation' && r.payload.late).length);
+  }
+  return result;
+}
 /** Captions pulled from pigateway's SSE bus; disabled when GATEWAY_EVENTS_URL is unset */
 const GATEWAY_EVENTS_URL = process.env.GATEWAY_EVENTS_URL || '';
 const GATEWAY_CAPTION_STREAM = process.env.GATEWAY_CAPTION_STREAM || DEFAULT_STREAM;
@@ -182,7 +201,7 @@ const gatewayCaptions = new GatewayCaptions({
   retentionSeconds: CAPTION_RETENTION_SECONDS,
   log: (msg) => console.log(`[gateway-captions] ${msg}`),
   mapper: createGatewayMapper(),
-  storeEvents: (stream, events, nowMs) => storeAndPublish(store.db, eventBus, stream, events, nowMs),
+  storeEvents: (stream, events, nowMs) => storeStreamEvents(stream, events, nowMs),
 });
 /** Input URL of the radio pull and of the probe, with {name}. Deployment config only. */
 const RADIO_SOURCE_URL_TEMPLATE = process.env.RADIO_SOURCE_URL_TEMPLATE || '';
@@ -202,7 +221,9 @@ const probeService = createProbeService({
 });
 /** MediaMTX ready and notready hooks: start or stop the radio pull, probe the input. */
 const readyHooks = createReadyHandler({
-  supervisor, probe: probeService, radioOnReady: RADIO_ON_READY,
+  supervisor, probe: probeService,
+  // RADIO_ON_READY=off wins; otherwise the stream's own `radio` setting decides (P8).
+  radioOnReady: (name) => RADIO_ON_READY && getConfig(db, name).radio,
   log: (msg) => console.log(`[ready-hooks] ${msg}`),
 });
 
@@ -628,6 +649,8 @@ app.get('/metrics', requireMetricsToken, (_req, res) => {
     `web_radio_relay_live_plays_total ${_statsCache.livePlayCount}`,
     '# TYPE web_radio_relay_stream_sessions_total counter',
     `web_radio_relay_stream_sessions_total ${_statsCache.streamSessions.length}`,
+    '# TYPE relay_translations_late_total counter',
+    ...lateTranslations.entries().map(([s, n]) => `relay_translations_late_total{stream="${s}"} ${n}`),
     '',
   ];
   res.type('text/plain; version=0.0.4').send(lines.join('\n'));
@@ -978,17 +1001,20 @@ app.post('/api/v1/streams/:name/events', requireToken, streamFromRequest, (req, 
   const checked = validateEventBatch(req.body);
   if (!checked.ok) return res.status(400).json({ error: checked.error });
   const nowMs = Date.now();
-  const { added, deduped } = storeAndPublish(store.db, eventBus, req.stream, checked.events, nowMs);
+  const { added, deduped } = storeStreamEvents(req.stream, checked.events, nowMs);
   res.status(202).json({ added, deduped });
 });
 
 // GET /api/v1/viewer/{key} — LCYT-compatible viewer SSE (plan P7.5). Public: no Bearer token, CORS *,
-// public rate limit. The key is the stream name for now (no per-stream viewer key yet).
+// public rate limit. The key is the stream's viewerKey when it has one (P8), else the stream name, which
+// only works while the stream has no viewerKey.
 app.get('/api/v1/viewer/:key', mediaLimiter, (req, res) => {
   const key = req.params.key;
-  if (!isValidStreamName(key)) {
-    return res.status(400).json({ error: 'Invalid viewer key: a stream name (a-z, 0-9, _ or -, up to 32 characters).' });
+  if (!isValidStreamName(key) && !VIEWER_KEY.test(key)) {
+    return res.status(400).json({ error: 'Invalid viewer key: a viewer key (8-64 characters) or a stream name.' });
   }
+  const stream = resolveViewerStream(db, key);
+  if (!stream) return res.status(404).json({ error: 'Unknown viewer key' });
   const requested = req.query.mode === undefined ? 'live' : req.query.mode;
   if (!VIEWER_MODES.includes(requested)) {
     return res.status(400).json({ error: 'mode must be live or delayed' });
@@ -997,10 +1023,26 @@ app.get('/api/v1/viewer/:key', mediaLimiter, (req, res) => {
     res,
     db,
     bus: eventBus,
-    stream: key,
+    stream,
     mode: requested,
-    delayMsOf: () => streams.delayOf(key) * 1000,
+    delayMsOf: () => streams.delayOf(stream) * 1000,
   });
+});
+
+// Per-stream config (P8). Scope stream:<s>:control; the env admin token and admin tokens pass.
+
+app.get('/api/v1/streams/:name/config', requireStreamControl, streamFromRequest, (req, res) => {
+  res.json({ stream: req.stream, config: getConfig(db, req.stream) });
+});
+
+app.put('/api/v1/streams/:name/config', requireStreamControl, streamFromRequest, (req, res) => {
+  try {
+    const config = putConfig(db, req.stream, req.body ?? {}, Date.now());
+    res.json({ stream: req.stream, config });
+  } catch (err) {
+    if (err instanceof StreamConfigError) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
 });
 
 app.get('/api/v1/captions/source', requireToken, (_req, res) => {

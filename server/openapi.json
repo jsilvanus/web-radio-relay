@@ -141,6 +141,49 @@
           }
         }
       },
+      "StreamConfig": {
+        "type": "object",
+        "required": ["visibleLanguages", "radio", "videoHls", "recordOnLive", "publicGraphics", "viewerKey"],
+        "properties": {
+          "visibleLanguages": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10,
+            "items": { "type": "string", "example": "fi" },
+            "description": "Languages viewers get (translations and composedText). Default [\"fi\"]."
+          },
+          "radio": { "type": "boolean", "description": "Start the radio pull when MediaMTX reports the source ready. Default true." },
+          "videoHls": { "type": "boolean", "description": "Stored for the video phase; no effect yet. Default false." },
+          "recordOnLive": { "type": "boolean", "description": "Stored for the recording phase; no effect yet. Default false." },
+          "publicGraphics": { "type": "boolean", "description": "Send graphic events to viewers. Default true." },
+          "viewerKey": {
+            "type": ["string", "null"],
+            "pattern": "^[a-z0-9_-]{8,64}$",
+            "description": "Key for /api/v1/viewer/{viewerKey}, or null (the stream name opens the viewer). Default null."
+          }
+        }
+      },
+      "StreamConfigPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Any subset of the StreamConfig fields.",
+        "properties": {
+          "visibleLanguages": { "type": "array", "minItems": 1, "maxItems": 10, "items": { "type": "string" } },
+          "radio": { "type": "boolean" },
+          "videoHls": { "type": "boolean" },
+          "recordOnLive": { "type": "boolean" },
+          "publicGraphics": { "type": "boolean" },
+          "viewerKey": { "type": ["string", "null"], "pattern": "^[a-z0-9_-]{8,64}$" }
+        }
+      },
+      "StreamConfigResponse": {
+        "type": "object",
+        "required": ["stream", "config"],
+        "properties": {
+          "stream": { "type": "string" },
+          "config": { "$ref": "#/components/schemas/StreamConfig" }
+        }
+      },
       "Delay": {
         "type": "object",
         "required": [
@@ -2095,19 +2138,83 @@
         }
       }
     },
+    "/api/v1/streams/{name}/config": {
+      "get": {
+        "operationId": "getStreamConfig",
+        "summary": "Read the per-stream config",
+        "description": "Stored fields over the defaults. Scope stream:<name>:control (the admin token passes).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
+            "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Config",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StreamConfigResponse" } } }
+          },
+          "401": { "description": "Missing, wrong or expired token" },
+          "403": { "description": "Token lacks stream:<name>:control" }
+        }
+      },
+      "put": {
+        "operationId": "setStreamConfig",
+        "summary": "Set part of the per-stream config",
+        "description": "Only the fields sent are changed. Unknown fields are refused (400). visibleLanguages: 1 to 10 language tags; the translations viewers get and the language shown under the original (composedText) follow it. radio: the MediaMTX ready hook starts the radio pull (RADIO_ON_READY=off still wins). publicGraphics: false keeps graphic events from viewers. videoHls and recordOnLive are stored for later phases and have no effect yet. viewerKey: null, or 8-64 characters a-z 0-9 _ -; the viewer then opens at /api/v1/viewer/{viewerKey} and the stream name no longer opens it. A viewerKey used by another stream answers 409.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
+            "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/StreamConfigPatch" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Config after the change",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StreamConfigResponse" } } }
+          },
+          "400": {
+            "description": "Invalid field or value (the message names it)",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "401": { "description": "Missing, wrong or expired token" },
+          "403": { "description": "Token lacks stream:<name>:control" },
+          "409": {
+            "description": "viewerKey is already used by another stream",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
     "/api/v1/viewer/{key}": {
       "get": {
         "operationId": "streamViewerEvents",
         "summary": "LCYT-compatible viewer stream (SSE), public",
-        "description": "Server-Sent Events for viewer pages and the LCYT Android TV app. Public: no token, CORS Access-Control-Allow-Origin *, public rate limit. The key is the stream name for now. Events: connected { ok, stream, mode }; caption { text, composedText, translations, codes, sequence, timestamp } (timestamp is ISO without Z; a translation re-sends its caption with the same sequence and translations filled); section { id, timestamp, title, kind?, index? }; graphic { id, timestamp, kind, title?, text?, assetId?, hymnNumber?, verse?, lines? }. On connect the current section, graphic and caption are sent once. A comment line is sent every 25 s.",
+        "description": "Server-Sent Events for viewer pages and the LCYT Android TV app. Public: no token, CORS Access-Control-Allow-Origin *, public rate limit. The key is the stream's viewerKey when it has one (PUT /api/v1/streams/{name}/config), else the stream name (404 once the stream has a viewerKey). Viewers get only the stream's visibleLanguages; graphic events are left out when publicGraphics is false. Events: connected { ok, stream, mode }; caption { text, composedText, translations, codes, sequence, timestamp } (timestamp is ISO without Z; a translation re-sends its caption with the same sequence and translations filled); section { id, timestamp, title, kind?, index? }; graphic { id, timestamp, kind, title?, text?, assetId?, hymnNumber?, verse?, lines? }. On connect the current section, graphic and caption are sent once. A comment line is sent every 25 s.",
         "security": [],
         "parameters": [
           {
             "name": "key",
             "in": "path",
             "required": true,
-            "description": "Viewer key: a stream name (a-z 0-9 _ - up to 32 characters).",
-            "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" }
+            "description": "Viewer key: the stream's viewerKey (8-64 characters a-z 0-9 _ -), or a stream name (up to 32 characters) while the stream has no viewerKey.",
+            "schema": { "type": "string", "pattern": "^[a-z0-9_-]{1,64}$" }
           },
           {
             "name": "mode",

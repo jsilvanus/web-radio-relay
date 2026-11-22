@@ -24,7 +24,9 @@ export function parseHookPath(path) {
 /**
  * @param {{ supervisor: { start(name: string): Promise<unknown>, stop(name: string): Promise<unknown> },
  *           probe: { probe(name: string): Promise<unknown>, clear(name: string): void },
- *           radioOnReady?: boolean, log?: (message: string) => void }} deps
+ *           radioOnReady?: boolean | ((stream: string) => boolean),
+ *           log?: (message: string) => void }} deps
+ *   radioOnReady: a boolean, or a function of the stream (per-stream config `radio`, P8).
  * @returns {{ ready(path: string): Promise<{ action: string, stream?: string }>,
  *             notready(path: string): Promise<{ action: string, stream?: string }> }}
  */
@@ -43,7 +45,14 @@ export function createReadyHandler({ supervisor, probe, radioOnReady = true, log
       const hook = parseHookPath(path);
       if (!hook || hook.captioner) return { action: 'ignored' };
       probeInBackground(hook.stream);
-      if (!radioOnReady) return { action: 'ignored', stream: hook.stream };
+      let radioOn;
+      try {
+        radioOn = typeof radioOnReady === 'function' ? radioOnReady(hook.stream) : radioOnReady;
+      } catch (err) {
+        log(`ready ${hook.stream}: radio setting unreadable: ${describe(err)}`);
+        return { action: 'error', stream: hook.stream };
+      }
+      if (!radioOn) return { action: 'ignored', stream: hook.stream };
       try {
         await supervisor.start(hook.stream);
       } catch (err) {

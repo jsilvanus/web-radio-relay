@@ -60,12 +60,14 @@ export function createGatewayMapper() {
   function mapTranslation(d, out) {
     if (!isObject(d)) { counts.rejected++; return; }
     const sourceKey = typeof d.sourceKey === 'string' ? d.sourceKey : undefined;
+    // Same normalisation as validateEvent (trim, lower case), so the key and the stored lang agree.
+    const lang = typeof d.lang === 'string' ? d.lang.trim().toLowerCase() : d.lang;
     accept({
       type: 'translation',
-      lang: d.lang,
+      lang,
       startedAt: d.startMs,
       endedAt: d.endMs,
-      sourceKey: sourceKey === undefined ? undefined : `${sourceKey}:${d.lang}`,
+      sourceKey: sourceKey === undefined ? undefined : `${sourceKey}:${lang}`,
       payload: { text: d.text, sourceKey, model: d.model },
     }, out);
   }

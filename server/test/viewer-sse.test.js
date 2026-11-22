@@ -6,6 +6,7 @@ import { addEvents } from '../lib/event-store.js';
 import { createEventBus, storeAndPublish } from '../lib/event-bus.js';
 import { validateEvent } from '../lib/events.js';
 import { openViewerSession, closeViewerSessions, viewerSessionCount } from '../lib/viewer-sse.js';
+import { putConfig } from '../lib/stream-config.js';
 
 const STREAM = 'church';
 const T0 = Date.UTC(2026, 2, 10, 12, 0, 0, 0);
@@ -120,6 +121,7 @@ test('live: a caption stored through storeAndPublish reaches the viewer at once'
 test('live: a translation re-sends its caption with the same sequence and translations filled', () => {
   const { db, close } = openStore(':memory:');
   try {
+    putConfig(db, STREAM, { visibleLanguages: ['fi', 'sv'] });
     const bus = createEventBus();
     const clk = clock();
     const { res } = open(db, bus, clk, { mode: 'live' });
@@ -245,6 +247,7 @@ test('delayed: two events with the same startedAt are both sent, once each', () 
 test('delayed: a translation arriving after its caption re-sends the caption with the translation', () => {
   const { db, close } = openStore(':memory:');
   try {
+    putConfig(db, STREAM, { visibleLanguages: ['fi', 'en'] });
     const clk = clock();
     const { res } = open(db, createEventBus(), clk, { mode: 'delayed', delayMsOf: () => 0 });
     addEvents(db, STREAM, [ev({ type: 'caption', lang: 'fi', startedAt: T0, sourceKey: 'c9', payload: { text: 'Alku' } })], T0);
@@ -299,6 +302,83 @@ test('heartbeat: a comment line on the heartbeat timer, and cleanup on close', (
     assert.equal(clk.active(500), 0);
     assert.equal(clk.active(25_000), 0);
     assert.equal(viewerSessionCount(), sessionsBefore);
+  } finally {
+    close();
+  }
+});
+
+test('config: translations sent are only the visible languages', () => {
+  const { db, close } = openStore(':memory:');
+  try {
+    putConfig(db, STREAM, { visibleLanguages: ['fi', 'sv'] });
+    const bus = createEventBus();
+    const clk = clock();
+    const { res } = open(db, bus, clk, { mode: 'live' });
+    storeAndPublish(db, bus, STREAM, [ev({ type: 'caption', lang: 'fi', startedAt: T0, sourceKey: 'v1', payload: { text: 'Hyvää' } })], T0);
+    storeAndPublish(db, bus, STREAM, [
+      ev({ type: 'translation', lang: 'en', startedAt: T0, sourceKey: 'v1:en', payload: { text: 'Good', sourceKey: 'v1' } }),
+      ev({ type: 'translation', lang: 'sv', startedAt: T0, sourceKey: 'v1:sv', payload: { text: 'God', sourceKey: 'v1' } }),
+    ], T0 + 1);
+    const last = named(res, 'caption').at(-1).data;
+    assert.deepEqual(last.translations, { sv: 'God' }, 'en is hidden');
+    assert.equal(last.composedText, 'Hyvää<br>God');
+  } finally {
+    close();
+  }
+});
+
+test('config: composedText uses the first visible language that is not the caption own language', () => {
+  const { db, close } = openStore(':memory:');
+  try {
+    putConfig(db, STREAM, { visibleLanguages: ['fi', 'en', 'sv'] });
+    const bus = createEventBus();
+    const clk = clock();
+    const { res } = open(db, bus, clk, { mode: 'live' });
+    storeAndPublish(db, bus, STREAM, [ev({ type: 'caption', lang: 'fi', startedAt: T0, sourceKey: 'v2', payload: { text: 'Hyvää' } })], T0);
+    storeAndPublish(db, bus, STREAM, [
+      ev({ type: 'translation', lang: 'sv', startedAt: T0, sourceKey: 'v2:sv', payload: { text: 'God', sourceKey: 'v2' } }),
+      ev({ type: 'translation', lang: 'en', startedAt: T0, sourceKey: 'v2:en', payload: { text: 'Good', sourceKey: 'v2' } }),
+    ], T0 + 1);
+    const last = named(res, 'caption').at(-1).data;
+    assert.equal(last.composedText, 'Hyvää<br>Good', 'en comes before sv in visibleLanguages');
+  } finally {
+    close();
+  }
+});
+
+test('config: a caption in the only visible language has plain composedText', () => {
+  const { db, close } = openStore(':memory:');
+  try {
+    const bus = createEventBus();
+    const clk = clock();
+    const { res } = open(db, bus, clk, { mode: 'live' });
+    storeAndPublish(db, bus, STREAM, [ev({ type: 'caption', lang: 'fi', startedAt: T0, sourceKey: 'v3', payload: { text: 'Hyvää' } })], T0);
+    storeAndPublish(db, bus, STREAM, [
+      ev({ type: 'translation', lang: 'en', startedAt: T0, sourceKey: 'v3:en', payload: { text: 'Good', sourceKey: 'v3' } }),
+    ], T0 + 1);
+    assert.equal(named(res, 'caption').length, 1, 'a hidden translation does not re-send the caption');
+    assert.equal(named(res, 'caption')[0].data.composedText, 'Hyvää');
+    assert.deepEqual(named(res, 'caption')[0].data.translations, {});
+  } finally {
+    close();
+  }
+});
+
+test('config: publicGraphics false keeps graphic events out, on connect and live', () => {
+  const { db, close } = openStore(':memory:');
+  try {
+    addEvents(db, STREAM, [ev({ type: 'graphic', startedAt: T0 - 1000, payload: { kind: 'text', text: 'Vanha' } })], T0);
+    putConfig(db, STREAM, { publicGraphics: false });
+    const bus = createEventBus();
+    const clk = clock();
+    const { res } = open(db, bus, clk, { mode: 'live' });
+    assert.equal(named(res, 'graphic').length, 0, 'not on connect');
+    storeAndPublish(db, bus, STREAM, [ev({ type: 'graphic', startedAt: T0, payload: { kind: 'text', text: 'Uusi' } })], T0);
+    assert.equal(named(res, 'graphic').length, 0, 'not live');
+    putConfig(db, STREAM, { publicGraphics: true });
+    storeAndPublish(db, bus, STREAM, [ev({ type: 'graphic', startedAt: T0 + 1, payload: { kind: 'text', text: 'Kolmas' } })], T0 + 1);
+    assert.equal(named(res, 'graphic').length, 1, 'a change applies to the open viewer at once');
+    assert.equal(named(res, 'graphic')[0].data.text, 'Kolmas');
   } finally {
     close();
   }
