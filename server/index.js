@@ -7,6 +7,10 @@
  *   GET  /api/stats                  aggregate anonymous play/session statistics
  *   POST /api/stats/event            play event from the widget
  *   GET  /api/hls/delayed.m3u8       live audio playlist, delayed server side
+ *   GET  /api/streams/{s}/hls/video/delayed.m3u8   live video playlist, delayed the same way
+ *   GET  /api/streams/{s}/hls/master.m3u8          master: delayed video + subtitle renditions
+ *   GET  /api/streams/{s}/hls/subs/{lang}.m3u8     subtitle playlist (one VTT per video segment)
+ *   GET  /api/streams/{s}/hls/subs/{lang}/{seq}.vtt  WebVTT captions of one video segment
  *   GET  /api/captions               captions released for listeners (?lang=&from=&limit=)
  *   GET  /api/openapi.json           the OpenAPI document of this API
  *   GET  /listen                     listener page: audio plus captions
@@ -69,13 +73,16 @@ import { requireBearer, requireScope, tokensEqual } from './lib/auth.js';
 import { openStore } from './lib/store.js';
 import { createToken, findTokenByValue, listTokens, revokeToken, validateTokenRequest } from './lib/tokens.js';
 import { decide } from './lib/mediamtx-auth.js';
-import { buildDelayedPlaylist } from './lib/hls-delay.js';
+import { buildDelayedPlaylist, parseMediaPlaylist } from './lib/hls-delay.js';
+import {
+  CUE_LOOKBACK_MS, isSubtitleLang, masterPlaylist, segmentSeq, subsPlaylist, vttForSegment,
+} from './lib/vtt-segments.js';
 import { validateCaptionBody } from './lib/captions.js';
 import { isValidStreamName, StreamRegistry } from './lib/streams.js';
 import { StreamSupervisor } from './lib/stream-supervisor.js';
 import { GatewayCaptions } from './lib/gateway-captions.js';
 import { createGatewayMapper } from './lib/gateway-map.js';
-import { addEvents } from './lib/event-store.js';
+import { addEvents, rangeEvents } from './lib/event-store.js';
 import { validateEventBatch } from './lib/events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -610,6 +617,126 @@ app.get(['/api/streams/:name/hls/delayed.m3u8', '/api/hls/delayed.m3u8'], stream
   }
   res.set('Cache-Control', 'no-cache');
   res.type('application/vnd.apple.mpegurl').send(body);
+});
+
+// ---------------------------------------------------------------------------
+// Video HLS (P6.2, P6.3): delayed video playlist, WebVTT renditions and master.
+// The live video playlist is <HLS_DIR>/<stream>/video/stream.m3u8 (hls-args.js).
+// ---------------------------------------------------------------------------
+const VIDEO_SUB_LANGS = (process.env.VIDEO_SUB_LANGS || 'fi').split(',').map((s) => s.trim()).filter(Boolean);
+for (const lang of VIDEO_SUB_LANGS) {
+  if (!isSubtitleLang(lang)) throw new Error(`VIDEO_SUB_LANGS: invalid language tag "${lang}"`);
+}
+const VIDEO_BANDWIDTH = Number(process.env.VIDEO_BANDWIDTH || 2500000);
+const VIDEO_RESOLUTION = process.env.VIDEO_RESOLUTION || '1280x720';
+if (!Number.isInteger(VIDEO_BANDWIDTH) || VIDEO_BANDWIDTH <= 0) throw new Error('VIDEO_BANDWIDTH must be a positive integer');
+if (!/^\d+x\d+$/.test(VIDEO_RESOLUTION)) throw new Error('VIDEO_RESOLUTION must look like 1280x720');
+
+/** Wall-clock start of the first timed video segment seen per stream: the PTS origin of the WebVTT maps. */
+const videoOriginMs = new Map();
+
+/** Live video playlist of a stream with its parsed segments, or null when there is no video HLS. */
+function liveVideo(stream) {
+  let text;
+  try {
+    text = fs.readFileSync(path.join(HLS_DIR, stream, 'video', 'stream.m3u8'), 'utf8');
+  } catch {
+    return null;
+  }
+  const parsed = parseMediaPlaylist(text);
+  if (!videoOriginMs.has(stream)) {
+    const first = parsed.segments.find((s) => s.startMs != null);
+    if (first) videoOriginMs.set(stream, first.startMs);
+  }
+  return { text, parsed, originMs: videoOriginMs.get(stream) };
+}
+
+// GET /api/streams/:name/hls/master.m3u8 — subtitle renditions plus the delayed video
+app.get('/api/streams/:name/hls/master.m3u8', streamFromRequest, (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/vnd.apple.mpegurl').send(masterPlaylist({
+    stream: req.stream,
+    langs: VIDEO_SUB_LANGS,
+    bandwidth: VIDEO_BANDWIDTH,
+    resolution: VIDEO_RESOLUTION,
+  }));
+});
+
+// GET /api/streams/:name/hls/video/delayed.m3u8 — the delayed video playlist (as the audio one)
+app.get('/api/streams/:name/hls/video/delayed.m3u8', streamFromRequest, (req, res) => {
+  const live = liveVideo(req.stream);
+  if (live === null) {
+    res.status(404).type('text/plain').send('Video is not live\n');
+    return;
+  }
+  const body = buildDelayedPlaylist(live.text, {
+    delaySeconds: streams.delayOf(req.stream),
+    nowMs: Date.now(),
+    segmentPrefix: `${HLS_SEGMENT_PREFIX}${req.stream}/video/`,
+  });
+  if (body === null) {
+    res.status(503).type('text/plain').send('Stream timing is not available (ffmpeg needs program_date_time)\n');
+    return;
+  }
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/vnd.apple.mpegurl').send(body);
+});
+
+// GET /api/streams/:name/hls/subs/:lang.m3u8 — subtitle media playlist, one VTT per video segment
+app.get('/api/streams/:name/hls/subs/:lang.m3u8', streamFromRequest, (req, res) => {
+  const lang = req.params.lang;
+  if (!isSubtitleLang(lang)) return res.status(400).json({ error: 'invalid subtitle language' });
+  const live = liveVideo(req.stream);
+  if (live === null) {
+    res.status(404).type('text/plain').send('Video is not live\n');
+    return;
+  }
+  // Same window as the delayed video playlist, so the segments line up
+  const delayed = buildDelayedPlaylist(live.text, {
+    delaySeconds: streams.delayOf(req.stream),
+    nowMs: Date.now(),
+    segmentPrefix: `${HLS_SEGMENT_PREFIX}${req.stream}/video/`,
+  });
+  if (delayed === null) {
+    res.status(503).type('text/plain').send('Stream timing is not available (ffmpeg needs program_date_time)\n');
+    return;
+  }
+  const { header, segments } = parseMediaPlaylist(delayed);
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/vnd.apple.mpegurl').send(subsPlaylist({
+    stream: req.stream,
+    lang,
+    segments,
+    mediaSequence: header.mediaSequence,
+    targetDuration: header.targetDuration,
+  }));
+});
+
+// GET /api/streams/:name/hls/subs/:lang/:seq.vtt — captions of one video segment
+app.get('/api/streams/:name/hls/subs/:lang/:seq.vtt', streamFromRequest, (req, res) => {
+  const { lang, seq } = req.params;
+  if (!isSubtitleLang(lang)) return res.status(400).json({ error: 'invalid subtitle language' });
+  if (!/^\d+$/.test(seq)) return res.status(400).json({ error: 'seq must be an integer' });
+  const live = liveVideo(req.stream);
+  const segment = live && live.parsed.segments.find((s) => segmentSeq(s.uri) === Number(seq));
+  if (!segment || segment.startMs == null || segment.duration == null) {
+    return res.status(404).type('text/plain').send('Segment not found\n');
+  }
+  const segStartMs = segment.startMs;
+  const segEndMs = segStartMs + Math.round(segment.duration * 1000);
+  const events = rangeEvents(db, {
+    stream: req.stream,
+    fromMs: segStartMs - CUE_LOOKBACK_MS,
+    toMs: segEndMs,
+  });
+  res.set('Cache-Control', 'no-cache');
+  res.type('text/vtt; charset=utf-8').send(vttForSegment({
+    segStartMs,
+    segEndMs,
+    events,
+    lang,
+    originMs: live.originMs,
+  }));
 });
 
 // ---------------------------------------------------------------------------

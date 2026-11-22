@@ -980,6 +980,181 @@
         ]
       }
     },
+    "/api/streams/{name}/hls/master.m3u8": {
+      "get": {
+        "operationId": "getStreamMasterPlaylist",
+        "summary": "Master playlist of one stream: delayed video plus subtitle renditions",
+        "description": "Languages come from the VIDEO_SUB_LANGS setting (default fi). Bandwidth and resolution come from VIDEO_BANDWIDTH and VIDEO_RESOLUTION.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "HLS master playlist",
+            "content": {
+              "application/vnd.apple.mpegurl": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/streams/{name}/hls/video/delayed.m3u8": {
+      "get": {
+        "operationId": "getStreamDelayedVideoPlaylist",
+        "summary": "Live video playlist of one stream, delayed by the relay",
+        "description": "Same delay and window as the audio playlist, read from the video HLS directory.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "HLS media playlist",
+            "content": {
+              "application/vnd.apple.mpegurl": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Video is not live"
+          },
+          "503": {
+            "description": "Stream timing is not available (ffmpeg needs program_date_time)"
+          }
+        }
+      }
+    },
+    "/api/streams/{name}/hls/subs/{lang}.m3u8": {
+      "get": {
+        "operationId": "getStreamSubtitlePlaylist",
+        "summary": "Subtitle media playlist of one language, one WebVTT per delayed video segment",
+        "description": "Same media sequence and durations as the delayed video playlist.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          },
+          {
+            "name": "lang",
+            "in": "path",
+            "required": true,
+            "description": "Language tag (e.g. fi, sv, zh-Hant), or original for the caption events themselves.",
+            "schema": {
+              "type": "string",
+              "pattern": "^(?:[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?|original)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "HLS media playlist",
+            "content": {
+              "application/vnd.apple.mpegurl": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid language"
+          },
+          "404": {
+            "description": "Video is not live"
+          },
+          "503": {
+            "description": "Stream timing is not available (ffmpeg needs program_date_time)"
+          }
+        }
+      }
+    },
+    "/api/streams/{name}/hls/subs/{lang}/{seq}.vtt": {
+      "get": {
+        "operationId": "getStreamSubtitleSegment",
+        "summary": "WebVTT captions of one video segment",
+        "description": "Cues overlapping the segment, relative to its start, with X-TIMESTAMP-MAP. A cue on a segment border appears in both segments.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          },
+          {
+            "name": "lang",
+            "in": "path",
+            "required": true,
+            "description": "Language tag (e.g. fi, sv, zh-Hant), or original for the caption events themselves.",
+            "schema": {
+              "type": "string",
+              "pattern": "^(?:[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?|original)$"
+            }
+          },
+          {
+            "name": "seq",
+            "in": "path",
+            "required": true,
+            "description": "Segment sequence number (the video file name without .ts).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "WebVTT segment",
+            "content": {
+              "text/vtt": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid language or sequence"
+          },
+          "404": {
+            "description": "Segment not found"
+          }
+        }
+      }
+    },
     "/api/streams/{name}/captions": {
       "get": {
         "operationId": "listStreamCaptions",

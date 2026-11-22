@@ -188,6 +188,81 @@ export const operations = [
     ]
   },
   {
+    "operationId": "getStreamMasterPlaylist",
+    "method": "GET",
+    "path": "/api/streams/{name}/hls/master.m3u8",
+    "summary": "Master playlist of one stream: delayed video plus subtitle renditions",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "getStreamDelayedVideoPlaylist",
+    "method": "GET",
+    "path": "/api/streams/{name}/hls/video/delayed.m3u8",
+    "summary": "Live video playlist of one stream, delayed by the relay",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "getStreamSubtitlePlaylist",
+    "method": "GET",
+    "path": "/api/streams/{name}/hls/subs/{lang}.m3u8",
+    "summary": "Subtitle media playlist of one language, one WebVTT per delayed video segment",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "lang",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "getStreamSubtitleSegment",
+    "method": "GET",
+    "path": "/api/streams/{name}/hls/subs/{lang}/{seq}.vtt",
+    "summary": "WebVTT captions of one video segment",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "lang",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "seq",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
     "operationId": "listStreamCaptions",
     "method": "GET",
     "path": "/api/streams/{name}/captions",
