@@ -475,9 +475,10 @@ Copy `.env.example` to `.env` and override only what you need.
 | `DEFAULT_STREAM` | `stream` | Stream used by the legacy routes without a name (`/api/status`, `/api/captions`) |
 | `HLS_SEGMENT_PREFIX` | `/hls/` | URL prefix of segment files named in the delayed playlist (nginx serves `/hls/`) |
 | `CAPTION_RETENTION_SECONDS` | `3600` | How long captions stay in memory |
-| `GATEWAY_EVENTS_URL` | *(unset)* | Base URL of pigateway (e.g. `https://host:port`). When set, the relay pulls captions from `GET <url>/api/v1/events?types=transcript` (SSE) and adds them to the stream named by `GATEWAY_CAPTION_STREAM`. Unset disables the pull. `POST /api/v1/captions` keeps working either way |
+| `GATEWAY_EVENTS_URL` | *(unset)* | Base URL of pigateway (e.g. `https://host:port`). When set, the relay pulls `GET <url>/api/v1/events?types=transcript,rundown,translation,graphic` (SSE). Transcripts go to the caption buffer of the stream named by `GATEWAY_CAPTION_STREAM`; the other three become timeline events (see *Timeline events* below). Unset disables the pull. `POST /api/v1/captions` keeps working either way |
 | `GATEWAY_TOKEN` | *(unset)* | Bearer token sent to pigateway. Never shown in status output |
 | `GATEWAY_CAPTION_STREAM` | `DEFAULT_STREAM` | Stream that receives the gateway's captions |
+| `RELAY_DB_PATH` | `/var/lib/relay/relay.db` | SQLite file for the timeline events (WAL mode). The directory is created; use `:memory:` for tests |
 | `S3_ENDPOINT` | *(unset)* | S3 API base URL (path-style: `<endpoint>/<bucket>/<key>`). With `S3_BUCKET` unset, S3 is off. Used by the recording client (`server/lib/s3.js`) |
 | `S3_BUCKET` | *(unset)* | Bucket name. Required with `S3_ENDPOINT` |
 | `S3_REGION` | `us-east-1` | Region used in SigV4 signing |
@@ -597,7 +598,8 @@ Anonymous aggregate statistics, and the play events the widget sends. Both are p
 | Method and path | Purpose |
 |---|---|
 | `POST /api/v1/captions` | Push up to 100 caption segments: `{ "segments": [{ "lang", "text", "startedAt", "endedAt"? }] }`. `startedAt` is epoch milliseconds on the sender's clock (NTP-synced with the relay). Answers `202 { "accepted": n }`. One bad segment rejects the whole request with a `400` that names the field. |
-| `GET /api/v1/captions/source` | Status of the pigateway caption pull: `{ "captionSource": { "configured", "connected", "lastEventAt", "received", "rejected", "deduped", "reconnects", "lastError" } }`. See *Captions from pigateway* below. |
+| `POST /api/v1/streams/{name}/events` | Push up to 100 timeline events: `{ "events": [{ "type", "lang"?, "startedAt", "endedAt"?, "sourceKey"?, "payload" }] }`. Types `caption`, `translation`, `section`, `graphic`, `marker`, `data`. Answers `202 { "added", "deduped" }`; one bad event rejects the batch with a `400` whose message starts with `events[i]`. |
+| `GET /api/v1/captions/source` | Status of the pigateway pull: `{ "captionSource": { "configured", "connected", "lastEventAt", "received", "rejected", "deduped", "reconnects", "lastError", "mapper": { "mapped", "rejected", "unknown" } } }`. |
 | `GET /api/v1/delay` | `{ "delaySeconds", "maxSeconds" }` |
 | `PUT /api/v1/delay` | `{ "delaySeconds": 20 }`, an integer from 0 to `DELAY_MAX_SECONDS`. Applies at once to audio and captions. Not persisted: a restart returns to `DELAY_SECONDS`. |
 | `POST /api/v1/stats/session` | `{ "event": "start" \| "end", "streamName" }`. Sent by `on-publish.sh` and `on-publish-done.sh`. |
@@ -606,6 +608,10 @@ Responses: `401` for a missing or wrong token, `503` when `RELAY_API_TOKEN` is n
 constant time and is never accepted in the URL.
 
 **Rate limits:** public routes 60 requests per minute per IP; `/api/v1` 600 per minute per IP.
+
+**Timeline events.** Every event is stored in SQLite (`events` table) per stream with a `sourceKey` for de-duplication per stream and type. Final pigateway transcripts are stored as `caption` events with `sourceKey` = `epoch:seq`, next to the caption buffer. Pigateway `translation` events become `translation` events (`sourceKey` = `<sourceKey>:<lang>`); `rundown` snapshots become a `section` event whenever the section title changes; unknown pigateway events are ignored and counted in `mapper.unknown`. The push route above takes the same shape from senders that do not go through pigateway.
+
+**`graphic` contract.** A pigateway `graphic` event carries a relay event object with `type: "graphic"` (the same shape `POST .../events` accepts, `startedAt` optional and defaulting to the receive time). `payload.kind` is one of `hymn-verse`, `slide`, `image`, `text`, `clear`. `hymn-verse` takes `hymnNumber`, `title`, `verse` and `lines[]` (or `text`); `image` and `slide` take an `assetId` (`<64 hex>.png|jpg|webp`). An invalid graphic is counted in `mapper.rejected` and dropped.
 
 ### Listener page (`/listen`)
 

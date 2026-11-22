@@ -13,7 +13,8 @@
  *
  * Control (Bearer RELAY_API_TOKEN, see docs/API.md):
  *   POST /api/v1/captions            sender pushes timed captions (and later translations)
- *   GET  /api/v1/captions/source     status of the pigateway caption pull (GATEWAY_EVENTS_URL)
+ *   POST /api/v1/streams/{s}/events  push timeline events (batch of up to 100, see README)
+ *   GET  /api/v1/captions/source     status of the pigateway pull (GATEWAY_EVENTS_URL), incl. mapper stats
  *   GET  /api/v1/delay               read the listener delay
  *   PUT  /api/v1/delay               set the listener delay (0 .. DELAY_MAX_SECONDS)
  *   POST /api/v1/stats/session       stream session start/end (shell scripts)
@@ -28,6 +29,7 @@
  *   GATEWAY_EVENTS_URL       Base URL of pigateway; captions are pulled from its SSE bus (default: unset / disabled)
  *   GATEWAY_TOKEN            Bearer token for the gateway                (default: unset)
  *   GATEWAY_CAPTION_STREAM   Stream that receives the gateway captions   (default: DEFAULT_STREAM)
+ *   RELAY_DB_PATH            SQLite file for the timeline events; ':memory:' for tests (default: /var/lib/relay/relay.db)
  *   HLS_DIR                  Directory containing stream.m3u8           (default: /var/www/radio/hls)
  *   ARCHIVE_DIR              Directory containing archived MP3s         (default: /var/www/radio/archive)
  *   HIDDEN_ARCHIVE_DIR       Directory for hidden (aged-out) archives   (default: /var/www/radio/hidden_archive)
@@ -58,6 +60,10 @@ import { validateCaptionBody } from './lib/captions.js';
 import { isValidStreamName, StreamRegistry } from './lib/streams.js';
 import { StreamSupervisor } from './lib/stream-supervisor.js';
 import { GatewayCaptions } from './lib/gateway-captions.js';
+import { createGatewayMapper } from './lib/gateway-map.js';
+import { addEvents } from './lib/event-store.js';
+import { validateEventBatch } from './lib/events.js';
+import { openStore } from './lib/store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -98,6 +104,8 @@ const streams = new StreamRegistry({
   defaultDelaySeconds: INITIAL_DELAY_SECONDS,
   maxDelaySeconds: DELAY_MAX_SECONDS,
 });
+/** SQLite store of the timeline events (plan 7); RELAY_DB_PATH, ':memory:' in tests */
+const store = openStore();
 /** Captions pulled from pigateway's SSE bus; disabled when GATEWAY_EVENTS_URL is unset */
 const GATEWAY_EVENTS_URL = process.env.GATEWAY_EVENTS_URL || '';
 const GATEWAY_CAPTION_STREAM = process.env.GATEWAY_CAPTION_STREAM || DEFAULT_STREAM;
@@ -108,6 +116,8 @@ const gatewayCaptions = new GatewayCaptions({
   streams,
   retentionSeconds: CAPTION_RETENTION_SECONDS,
   log: (msg) => console.log(`[gateway-captions] ${msg}`),
+  mapper: createGatewayMapper(),
+  storeEvents: (stream, events, nowMs) => addEvents(store.db, stream, events, nowMs),
 });
 const supervisor = new StreamSupervisor({
   hlsDir: HLS_DIR, archiveDir: ARCHIVE_DIR,
@@ -642,6 +652,15 @@ app.post(['/api/v1/streams/:name/captions', '/api/v1/captions'], requireToken, s
   res.status(202).json({ stream: req.stream, accepted });
 });
 
+// Timeline events pushed by a sender (P7.2): validated as a batch, stored with the event store.
+app.post('/api/v1/streams/:name/events', requireToken, streamFromRequest, (req, res) => {
+  const checked = validateEventBatch(req.body);
+  if (!checked.ok) return res.status(400).json({ error: checked.error });
+  const nowMs = Date.now();
+  const { added, deduped } = addEvents(store.db, req.stream, checked.events, nowMs);
+  res.status(202).json({ added, deduped });
+});
+
 app.get('/api/v1/captions/source', requireToken, (_req, res) => {
   res.json({ captionSource: gatewayCaptions.status() });
 });
@@ -869,7 +888,7 @@ const server = app.listen(PORT, () => {
 });
 
 function shutdown() {
-  void Promise.allSettled([gatewayCaptions.stop(), supervisor.close()]).finally(() => server.close());
+  void Promise.allSettled([gatewayCaptions.stop(), supervisor.close()]).finally(() => server.close(() => store.close()));
 }
 process.once('SIGTERM', shutdown);
 process.once('SIGINT', shutdown);

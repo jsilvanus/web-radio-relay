@@ -7,11 +7,15 @@
  * - Sends `Last-Event-ID` after the first event; de-duplicates by (epoch, seq) so a
  *   replay does not add a caption twice. A new epoch (gateway restart) resets the dedupe state.
  * - Every transcript goes through validateCaptionBody; bad events are counted and skipped.
+ * - Each final transcript is also stored as a `caption` timeline event (sourceKey = epoch:seq).
+ * - rundown, translation and graphic events go through the mapper (gateway-map.js) and
+ *   are stored with storeEvents(stream, events, nowMs). Without a mapper they are ignored.
  */
 
 import { validateCaptionBody } from './captions.js';
+import { validateEvent } from './events.js';
 
-export const EVENTS_PATH = '/api/v1/events?types=transcript';
+export const EVENTS_PATH = '/api/v1/events?types=transcript,rundown,translation,graphic';
 const DEDUPE_WINDOW = 2000;
 
 /**
@@ -90,13 +94,15 @@ export class GatewayCaptions {
    *   retentionSeconds?: number, idleMs?: number,
    *   backoffMinMs?: number, backoffMaxMs?: number,
    *   fetchImpl?: typeof fetch, now?: () => number, random?: () => number,
-   *   log?: (msg: string) => void
+   *   log?: (msg: string) => void,
+   *   mapper?: ReturnType<import('./gateway-map.js').createGatewayMapper>,
+   *   storeEvents?: (stream: string, events: object[], nowMs: number) => { added: number, deduped: number }
    * }} options
    */
   constructor({
     baseUrl, token = '', stream, streams, retentionSeconds = 3600, idleMs = 45_000,
     backoffMinMs = 250, backoffMaxMs = 5000, fetchImpl = fetch, now = Date.now,
-    random = Math.random, log = () => {},
+    random = Math.random, log = () => {}, mapper = null, storeEvents = null,
   }) {
     this.baseUrl = baseUrl ? String(baseUrl).replace(/\/+$/, '') : '';
     this.token = token;
@@ -110,6 +116,8 @@ export class GatewayCaptions {
     this.now = now;
     this.random = random;
     this.log = log;
+    this.mapper = mapper;
+    this.storeEvents = storeEvents;
 
     this.running = false;
     this.connected = false;
@@ -156,6 +164,7 @@ export class GatewayCaptions {
       deduped: this.deduped,
       reconnects: this.reconnects,
       lastError: this.lastError,
+      mapper: this.mapper ? this.mapper.stats() : null,
     };
   }
 
@@ -250,7 +259,7 @@ export class GatewayCaptions {
 
   onEvent({ event, data, id }) {
     if (event === 'ready') { this.attempt = 0; return; }
-    if (event !== 'transcript') return;
+    if (event !== 'transcript') { this.onOtherEvent(event, data); return; }
     let payload;
     try {
       payload = JSON.parse(data);
@@ -266,12 +275,46 @@ export class GatewayCaptions {
     }
   }
 
+  /** rundown, translation, graphic: mapped to timeline events and stored. Never throws. */
+  onOtherEvent(event, data) {
+    if (!this.mapper || !this.storeEvents) return;
+    const nowMs = this.now();
+    try {
+      const events = this.mapper.map({ event, data }, nowMs);
+      if (events.length) this.storeEvents(this.stream, events, nowMs);
+    } catch (err) {
+      this.setError(err);
+    }
+  }
+
+  /** A final transcript as a `caption` timeline event. Storage errors do not touch the caption buffer. */
+  storeCaption(segment, payload, dedupeKey, nowMs) {
+    if (!this.storeEvents || payload.final === false) return;
+    try {
+      const checked = validateEvent({
+        type: 'caption',
+        lang: segment.lang,
+        startedAt: segment.startedAt,
+        endedAt: segment.endedAt ?? undefined,
+        sourceKey: dedupeKey ?? undefined,
+        payload: { text: segment.text, final: true },
+      });
+      // The caption itself was accepted above; a timeline-only rejection (e.g. text
+      // longer than the event limit) is not counted as a rejected caption.
+      if (!checked.ok) return;
+      this.storeEvents(this.stream, [checked.event], nowMs);
+    } catch (err) {
+      this.setError(err);
+    }
+  }
+
   onTranscript(payload, id) {
     if (!payload || typeof payload !== 'object') { this.rejected++; return; }
     const epoch = payload.epoch !== undefined ? String(payload.epoch) : null;
     const seq = payload.seq;
     const nowMs = this.now();
     this.lastEventAt = nowMs;
+    const dedupeKey = epoch !== null && Number.isInteger(seq) ? `${epoch}:${seq}` : null;
 
     if (epoch !== null && Number.isInteger(seq)) {
       if (epoch !== this.epoch) {
@@ -294,5 +337,6 @@ export class GatewayCaptions {
     if (!entry) { this.rejected++; this.setError(new Error('too many streams')); return; }
     this.received += entry.captions.add(checked.segments);
     entry.captions.prune(nowMs - (entry.delaySeconds * 1000 + this.retentionSeconds * 1000));
+    this.storeCaption(checked.segments[0], payload, dedupeKey, nowMs);
   }
 }
