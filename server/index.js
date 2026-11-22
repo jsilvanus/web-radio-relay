@@ -17,10 +17,14 @@
  *   GET  /api/v1/delay               read the listener delay
  *   PUT  /api/v1/delay               set the listener delay (0 .. DELAY_MAX_SECONDS)
  *   POST /api/v1/stats/session       stream session start/end (shell scripts)
+ *   POST /api/v1/tokens              admin: issue a scoped token (value shown once)
+ *   GET  /api/v1/tokens              admin: list tokens (never the values)
+ *   DELETE /api/v1/tokens/:id        admin: revoke a token
  *
  * Environment variables:
  *   PORT                     Port to listen on                          (default: 3000)
- *   RELAY_API_TOKEN          Bearer token for /api/v1 (unset = control API answers 503)
+ *   RELAY_API_TOKEN          Bearer token for /api/v1 (unset = control API answers 503 unless a stored token exists)
+ *   RELAY_DB_PATH            SQLite database file (default: /var/lib/relay/relay.db)
  *   DELAY_SECONDS            Listener delay for audio and captions     (default: 0)
  *   DELAY_MAX_SECONDS        Largest delay the API accepts; sizes the ffmpeg playlist (default: 60)
  *   HLS_SEGMENT_PREFIX       URL prefix of segment files in playlists  (default: /hls/)
@@ -52,7 +56,9 @@ import fs from 'fs';
 import path from 'path';
 import https from 'https';
 import { fileURLToPath } from 'url';
-import { requireBearer } from './lib/auth.js';
+import { requireBearer, requireScope } from './lib/auth.js';
+import { openStore } from './lib/store.js';
+import { createToken, listTokens, revokeToken, validateTokenRequest } from './lib/tokens.js';
 import { buildDelayedPlaylist } from './lib/hls-delay.js';
 import { validateCaptionBody } from './lib/captions.js';
 import { isValidStreamName, StreamRegistry } from './lib/streams.js';
@@ -82,6 +88,9 @@ const STATS_FILE = process.env.STATS_FILE || '/var/www/radio/stats/stats.json';
 const STATS_SESSION_DAYS = Number(process.env.STATS_SESSION_DAYS) || 90;
 /** Bearer token for the control API (/api/v1). Unset = control routes answer 503. */
 const RELAY_API_TOKEN = process.env.RELAY_API_TOKEN || '';
+/** SQLite store: streams, scoped tokens, destinations, recordings, events */
+const store = openStore();
+const db = store.db;
 
 /** Stream used by the legacy routes (/api/status, /api/captions, /api/hls/...) */
 const DEFAULT_STREAM = process.env.DEFAULT_STREAM || 'stream';
@@ -664,6 +673,37 @@ app.put(['/api/v1/streams/:name/delay', '/api/v1/delay'], requireToken, streamFr
 // ---------------------------------------------------------------------------
 // GET /api/archive
 // ---------------------------------------------------------------------------
+// Scoped tokens (admin only). The env RELAY_API_TOKEN and stored admin tokens pass.
+const requireAdmin = requireScope(() => 'admin', { adminToken: RELAY_API_TOKEN, db });
+
+app.post('/api/v1/tokens', requireAdmin, (req, res) => {
+  const check = validateTokenRequest(req.body);
+  if (!check.ok) {
+    res.status(400).json({ error: check.error });
+    return;
+  }
+  const made = createToken(db, check.value, Date.now());
+  res.status(201).json({
+    id: made.id,
+    token: made.token,
+    scopes: made.scopes,
+    expiresAt: made.expiresAt,
+    label: made.label,
+  });
+});
+
+app.get('/api/v1/tokens', requireAdmin, (_req, res) => {
+  res.json({ tokens: listTokens(db) });
+});
+
+app.delete('/api/v1/tokens/:id', requireAdmin, (req, res) => {
+  if (!revokeToken(db, req.params.id, Date.now())) {
+    res.status(404).json({ error: 'Token not found' });
+    return;
+  }
+  res.status(204).end();
+});
+
 app.get('/api/archive', (_req, res) => {
   let recordings = [];
 
@@ -869,7 +909,10 @@ const server = app.listen(PORT, () => {
 });
 
 function shutdown() {
-  void Promise.allSettled([gatewayCaptions.stop(), supervisor.close()]).finally(() => server.close());
+  void Promise.allSettled([gatewayCaptions.stop(), supervisor.close()]).finally(() => {
+    server.close();
+    store.close();
+  });
 }
 process.once('SIGTERM', shutdown);
 process.once('SIGINT', shutdown);

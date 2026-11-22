@@ -9,6 +9,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { openStore } from '../lib/store.js';
+import { createToken } from '../lib/tokens.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const TOKEN = 'test-token-123';
@@ -16,6 +19,8 @@ const PORT = 31000 + Math.floor(Math.random() * 2000);
 const base = `http://127.0.0.1:${PORT}`;
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tuberadio-'));
 const hls = path.join(dir, 'hls');
+// A file, not ':memory:': the expired-token test inserts a row through its own connection.
+const dbPath = path.join(dir, 'relay.db');
 fs.mkdirSync(hls);
 let child;
 
@@ -62,6 +67,7 @@ before(async () => {
       METRICS_BEARER_TOKEN: 'metrics-token',
       DELAY_SECONDS: '8',
       DELAY_MAX_SECONDS: '30',
+      RELAY_DB_PATH: dbPath,
     },
     stdio: 'ignore',
   });
@@ -250,4 +256,102 @@ test('caption source status is token protected and reports disabled when no gate
   const body = await (await fetch(`${base}/api/v1/captions/source`, { headers: auth })).json();
   assert.equal(body.captionSource.configured, false);
   assert.equal(body.captionSource.connected, false);
+});
+
+// --- scoped tokens (P2.2) ---------------------------------------------------
+
+const json = (body) => JSON.stringify(body);
+const withToken = (t) => ({ Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' });
+const sha256hex = (v) => createHash('sha256').update(v).digest('hex');
+let phone; // issued with stream:keskus:publish + stream:keskus:data
+let admin; // issued with the admin scope
+
+test('token API: admin issues a token; the value is returned once', async () => {
+  const res = await fetch(`${base}/api/v1/tokens`, {
+    method: 'POST',
+    headers: auth,
+    body: json({ scopes: ['stream:keskus:publish', 'stream:keskus:data'], expiresInSeconds: 3600, label: 'phone' }),
+  });
+  assert.equal(res.status, 201);
+  phone = await res.json();
+  assert.match(phone.id, /^tok_[0-9a-f]{12}$/);
+  assert.match(phone.token, /^[0-9a-f]{64}$/);
+  assert.deepEqual(phone.scopes, ['stream:keskus:publish', 'stream:keskus:data']);
+  assert.equal(phone.label, 'phone');
+  assert.equal(typeof phone.expiresAt, 'number');
+  assert.ok(phone.expiresAt > Date.now());
+});
+
+test('token API: the list never shows values or hashes', async () => {
+  const res = await fetch(`${base}/api/v1/tokens`, { headers: auth });
+  assert.equal(res.status, 200);
+  const text = await res.text();
+  const body = JSON.parse(text);
+  assert.ok(body.tokens.some((t) => t.id === phone.id && t.label === 'phone'));
+  assert.ok(!text.includes(phone.token));
+  assert.ok(!text.includes(sha256hex(phone.token)));
+  assert.ok(!body.tokens.some((t) => 'hash' in t || 'token' in t));
+});
+
+test('token API: invalid bodies answer 400', async () => {
+  const bad = [
+    undefined,
+    { scopes: [] },
+    { scopes: ['stream:Keskus:data'] },
+    { scopes: ['admin'], expiresInSeconds: 10 },
+    { scopes: ['admin'], label: 'x'.repeat(65) },
+  ];
+  for (const body of bad) {
+    const res = await fetch(`${base}/api/v1/tokens`, {
+      method: 'POST',
+      headers: auth,
+      body: body === undefined ? undefined : json(body),
+    });
+    assert.equal(res.status, 400, JSON.stringify(body));
+    assert.equal(typeof (await res.json()).error, 'string');
+  }
+});
+
+test('token API: a stream token is 403 on admin routes, no token is 401', async () => {
+  assert.equal((await fetch(`${base}/api/v1/tokens`, { headers: withToken(phone.token) })).status, 403);
+  assert.equal((await fetch(`${base}/api/v1/tokens`)).status, 401);
+  assert.equal((await fetch(`${base}/api/v1/tokens`, { headers: withToken('unknown') })).status, 401);
+});
+
+test('token API: a stored admin token works, and deleting it makes it 401', async () => {
+  const res = await fetch(`${base}/api/v1/tokens`, {
+    method: 'POST',
+    headers: auth,
+    body: json({ scopes: ['admin'] }),
+  });
+  assert.equal(res.status, 201);
+  admin = await res.json();
+  assert.equal(admin.expiresAt, null);
+  assert.equal((await fetch(`${base}/api/v1/tokens`, { headers: withToken(admin.token) })).status, 200);
+
+  const del = await fetch(`${base}/api/v1/tokens/${admin.id}`, { method: 'DELETE', headers: auth });
+  assert.equal(del.status, 204);
+  assert.equal((await fetch(`${base}/api/v1/tokens`, { headers: withToken(admin.token) })).status, 401);
+  // revoking again is still 204; an unknown id is 404
+  assert.equal((await fetch(`${base}/api/v1/tokens/${admin.id}`, { method: 'DELETE', headers: auth })).status, 204);
+  const unknown = await fetch(`${base}/api/v1/tokens/tok_000000000000`, { method: 'DELETE', headers: auth });
+  assert.equal(unknown.status, 404);
+});
+
+test('token API: an expired token is 401', async () => {
+  const store = openStore(dbPath);
+  let expired;
+  try {
+    // issued two minutes ago with a one-minute life: expired now
+    expired = createToken(store.db, { scopes: ['admin'], expiresInSeconds: 60 }, Date.now() - 120_000);
+  } finally {
+    store.close();
+  }
+  assert.equal((await fetch(`${base}/api/v1/tokens`, { headers: withToken(expired.token) })).status, 401);
+});
+
+test('old control routes keep the env token only; stored tokens do not open them', async () => {
+  assert.equal((await fetch(`${base}/api/v1/delay`, { headers: auth })).status, 200);
+  assert.equal((await fetch(`${base}/api/v1/delay`, { headers: withToken(phone.token) })).status, 401);
+  assert.equal((await fetch(`${base}/api/v1/delay`, { headers: withToken(admin.token) })).status, 401);
 });
