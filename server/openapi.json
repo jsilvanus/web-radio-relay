@@ -2705,6 +2705,374 @@
           }
         }
       }
+    },
+    "/api/v1/streams/{name}/recordings": {
+      "post": {
+        "operationId": "startRecording",
+        "summary": "Start recording a stream to S3",
+        "description": "Needs stream:<name>:control (admin passes). Starts a copy-only recorder that writes 60 s segments to the local spool; an uploader moves each closed segment to S3 under recordings/<stream>/<sessionId>/. Needs S3_ENDPOINT and S3_BUCKET (503 otherwise). A running recording is returned as it is.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The recording session (state recording)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "recording": {
+                      "type": "object",
+                      "properties": {
+                        "stream": {
+                          "type": "string"
+                        },
+                        "sessionId": {
+                          "type": "string",
+                          "description": "Sortable id: UTC time to the millisecond plus 8 random hex characters."
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "recording",
+                            "degraded",
+                            "failed",
+                            "stopping",
+                            "stopped",
+                            "interrupted"
+                          ],
+                          "description": "degraded: spool over RECORDING_SPOOL_MAX_BYTES, recording goes on. stopping: uploads still retried, session.json not yet written."
+                        },
+                        "startedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "endedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        },
+                        "spoolBytes": {
+                          "type": "integer"
+                        },
+                        "segmentsUploaded": {
+                          "type": "integer"
+                        },
+                        "recorder": {
+                          "type": "string",
+                          "enum": [
+                            "running",
+                            "retrying",
+                            "failed",
+                            "stopped"
+                          ]
+                        },
+                        "restartCount": {
+                          "type": "integer"
+                        },
+                        "lastError": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "uploadError": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "The last S3 failure while uploading (HTTP status and S3 code only)."
+                        },
+                        "stderrTail": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "409": {
+            "description": "The previous recording of this stream is still uploading",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "S3 is not configured, or the relay is shutting down",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listRecordings",
+        "summary": "List the recordings of a stream",
+        "description": "Needs stream:<name>:control (admin passes). Newest first, from the database. manifest is the session.json of a stopped recording.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recordings of the stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "stream": {
+                      "type": "string"
+                    },
+                    "recordings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "sessionId": {
+                            "type": "string"
+                          },
+                          "stream": {
+                            "type": "string"
+                          },
+                          "startedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "endedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time"
+                          },
+                          "state": {
+                            "type": "string"
+                          },
+                          "manifest": {
+                            "type": [
+                              "object",
+                              "null"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/recordings/current": {
+      "delete": {
+        "operationId": "stopRecording",
+        "summary": "Stop the recording of a stream",
+        "description": "Needs stream:<name>:control (admin passes). Stops the recorder, uploads the remaining segments (the last one too), then writes the sidecars and session.json once. If S3 fails, the answer is state stopping and the uploads are retried in the background until session.json is written.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The session (state stopped, or stopping while uploads are retried)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "recording": {
+                      "type": "object",
+                      "properties": {
+                        "stream": {
+                          "type": "string"
+                        },
+                        "sessionId": {
+                          "type": "string",
+                          "description": "Sortable id: UTC time to the millisecond plus 8 random hex characters."
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "recording",
+                            "degraded",
+                            "failed",
+                            "stopping",
+                            "stopped",
+                            "interrupted"
+                          ],
+                          "description": "degraded: spool over RECORDING_SPOOL_MAX_BYTES, recording goes on. stopping: uploads still retried, session.json not yet written."
+                        },
+                        "startedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "endedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        },
+                        "spoolBytes": {
+                          "type": "integer"
+                        },
+                        "segmentsUploaded": {
+                          "type": "integer"
+                        },
+                        "recorder": {
+                          "type": "string",
+                          "enum": [
+                            "running",
+                            "retrying",
+                            "failed",
+                            "stopped"
+                          ]
+                        },
+                        "restartCount": {
+                          "type": "integer"
+                        },
+                        "lastError": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "uploadError": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "The last S3 failure while uploading (HTTP status and S3 code only)."
+                        },
+                        "stderrTail": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "404": {
+            "description": "No recording for this stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

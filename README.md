@@ -517,6 +517,8 @@ Copy `.env.example` to `.env` and override only what you need.
 | `S3_ACCESS_KEY_ID` | *(unset)* | Access key id for SigV4 signing |
 | `S3_SECRET_ACCESS_KEY` | *(unset)* | Secret key for SigV4 signing. Never logged or returned; never commit |
 | `S3_PREFIX` | `relay/` | Prefix added to every object key in the bucket |
+| `RECORDING_SPOOL_DIR` | `/var/lib/relay/spool` | Local spool of the recorder's 60 s segments; a segment is removed after its verified S3 upload. Needs S3 for recordings |
+| `RECORDING_SPOOL_MAX_BYTES` | `2147483648` (2 GiB) | Spool size above which recordings are `degraded` (recording goes on; nothing unuploaded is deleted) |
 
 ### FFmpeg / on-publish.sh
 
@@ -666,6 +668,13 @@ The admin token (`RELAY_API_TOKEN`) can issue narrower tokens, stored in SQLite 
 - Keys are stored encrypted with `RELAY_SECRET_KEY` and are never returned (`hasKey` only). Without that variable a destination with a key answers 503.
 - States: `off`, `starting`, `live` (5 s without exit), `retrying` (restart with backoff 2 s doubling to 60 s), `failed` (ffmpeg could not be started; no automatic retry). The stderr tail is redacted.
 - Starting a destination does not yet happen on its own when the stream goes live; that wiring is a later task.
+
+**Recordings to S3.** `POST /api/v1/streams/{name}/recordings` starts a copy-only recorder (60 s fragmented MP4 segments in `RECORDING_SPOOL_DIR`) and answers `202` with the session; a running one is returned as it is. `DELETE /api/v1/streams/{name}/recordings/current` stops it: the remaining segments are uploaded, then `recordings/<stream>/<sessionId>/sidecars/*` and `session.json` are written once. `GET /api/v1/streams/{name}/recordings` lists them from the database. Scope `stream:<name>:control`. Without `S3_ENDPOINT` and `S3_BUCKET` the start answers `503`.
+
+- Segments are uploaded to `recordings/<stream>/<sessionId>/<NNNNNN>.mp4` every 5 s, checked by size (and ETag) with a HEAD, then removed locally. An S3 error keeps the file and the next pass retries it.
+- States: `recording`, `degraded` (spool over `RECORDING_SPOOL_MAX_BYTES`; back to `recording` when under), `failed` (the recorder could not be started), `stopping` (uploads still retried after stop), `stopped`, `interrupted` (shutdown; the spool is kept and nothing is uploaded or recovered yet).
+- The recorder restarts with backoff like an egress child and continues the segment numbering.
+- Not wired yet: starting on the MediaMTX ready hook (`recordOnLive`), and recovery of spool files left by a crash.
 
 **Timeline events.** Every event is stored in SQLite (`events` table) per stream with a `sourceKey` for de-duplication per stream and type. Final pigateway transcripts are stored as `caption` events with `sourceKey` = `epoch:seq`, next to the caption buffer. Pigateway `translation` events become `translation` events (`sourceKey` = `<sourceKey>:<lang>`); `rundown` snapshots become a `section` event whenever the section title changes; unknown pigateway events are ignored and counted in `mapper.unknown`. The push route above takes the same shape from senders that do not go through pigateway.
 

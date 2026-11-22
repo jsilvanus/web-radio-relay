@@ -589,5 +589,50 @@ export const operations = [
         "required": true
       }
     ]
+  },
+  {
+    "operationId": "listRecordings",
+    "method": "GET",
+    "path": "/api/v1/streams/{name}/recordings",
+    "summary": "List the recordings of a stream",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "startRecording",
+    "method": "POST",
+    "path": "/api/v1/streams/{name}/recordings",
+    "summary": "Start recording a stream to S3",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "stopRecording",
+    "method": "DELETE",
+    "path": "/api/v1/streams/{name}/recordings/current",
+    "summary": "Stop the recording of a stream",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
   }
 ];

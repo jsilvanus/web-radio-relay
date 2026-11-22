@@ -11,16 +11,21 @@ const SEGMENT_FILE = /^\d{6}\.mp4$/;
 
 /**
  * @param {{ stream: string, spoolDir: string, sessionId: string, segmentSeconds?: number,
- *   rtspBase?: string, inputArgs?: { input: string } }} options
+ *   rtspBase?: string, inputArgs?: { input: string }, segmentStartNumber?: number }} options
+ *   segmentStartNumber: first file number of a relaunched recorder (omitted = 0, as before)
  * @returns {string[]}
  */
 export function recorderArgs({
-  stream, spoolDir, sessionId, segmentSeconds = 60, rtspBase, inputArgs,
+  stream, spoolDir, sessionId, segmentSeconds = 60, rtspBase, inputArgs, segmentStartNumber,
 } = {}) {
   assertStreamName(stream);
   const dir = assertDirectory(spoolDir, 'spoolDir');
   assertPathSegment(sessionId, 'sessionId');
   assertPositiveInteger(segmentSeconds, 'segmentSeconds');
+  if (segmentStartNumber !== undefined && (!Number.isInteger(segmentStartNumber) || segmentStartNumber < 0)) {
+    throw new Error('invalid segmentStartNumber: expected an integer >= 0');
+  }
+  const startNumber = segmentStartNumber === undefined ? [] : ['-segment_start_number', String(segmentStartNumber)];
 
   return [
     ...streamInputArgs({ stream, rtspBase, inputArgs }),
@@ -31,6 +36,7 @@ export function recorderArgs({
     '-segment_format', 'mp4',
     '-segment_format_options', 'movflags=+frag_keyframe+empty_moov+default_base_moof',
     '-reset_timestamps', '1',
+    ...startNumber,
     `${dir}/${sessionId}/%06d.mp4`,
   ];
 }
