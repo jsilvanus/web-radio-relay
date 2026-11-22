@@ -1,0 +1,41 @@
+# MediaMTX configuration for the relay (see README, "MediaMTX").
+#
+# Used with bluenviron/mediamtx:1.15.1-ffmpeg. The plain image is scratch-based
+# (only the /mediamtx binary), so the run-on-ready hooks below could not run there.
+#
+# Secrets are not written in this file. docker-compose passes HOOK_SECRET into the
+# container and sets MTX_AUTHHTTPADDRESS, an environment override that wins over
+# authHTTPAddress below, so the auth URL carries the secret from the environment.
+# Run-on hooks read $HOOK_SECRET from the same environment.
+
+logLevel: info
+
+api: yes
+apiAddress: :9997
+
+metrics: no
+
+rtmp: yes
+rtmpAddress: :1935
+
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]
+
+hls: no
+webrtc: no
+srt: no
+
+authMethod: http
+authHTTPAddress: "http://api:3000/internal/mediamtx/auth?secret=${HOOK_SECRET}"
+authHTTPExclude: []
+
+pathDefaults:
+  overridePublisher: no
+
+paths:
+  # Only live/<name> paths are accepted; anything else is refused.
+  "~^live/[a-z0-9_-]{1,32}(-cc)?$":
+    runOnReady: 'wget -q -O - --post-data= "http://api:3000/internal/mediamtx/ready?secret=$HOOK_SECRET&path=$MTX_PATH"'
+    runOnReadyRestart: no
+    runOnNotReady: 'wget -q -O - --post-data= "http://api:3000/internal/mediamtx/notready?secret=$HOOK_SECRET&path=$MTX_PATH"'

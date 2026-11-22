@@ -435,7 +435,7 @@ pnpm run build
 
 ## Managed stream lifecycle API
 
-The API container owns FFmpeg for streams started through the authenticated lifecycle API. Configure `RELAY_API_TOKEN` and `RADIO_SOURCE_URL_TEMPLATE` in `.env`; the template uses `{name}`, for example `rtsp://mediamtx:8554/{name}`. The source URL is deployment configuration and is never accepted in request bodies.
+The API container owns FFmpeg for streams started through the authenticated lifecycle API. Configure `RELAY_API_TOKEN` and `RADIO_SOURCE_URL_TEMPLATE` in `.env`; the template uses `{name}`, for example `rtsp://mediamtx:8554/live/{name}` (the MediaMTX path, see [MediaMTX](#mediamtx)). The source URL is deployment configuration and is never accepted in request bodies.
 
 - `POST /api/v1/streams/{name}/start`
 - `POST /api/v1/streams/{name}/stop`
@@ -446,6 +446,26 @@ Send `Authorization: Bearer <RELAY_API_TOKEN>`. Start and stop are idempotent. L
 
 Legacy RTMP publisher callbacks remain supported separately. Do not publish and API-manage the same stream name at once: both paths can otherwise attempt to write the same HLS/archive outputs. The RTSP pull lifecycle is configured independently of RTMP ingest.
 
+## MediaMTX
+
+RTMP ingest runs in [MediaMTX](https://github.com/bluenviron/mediamtx) (`bluenviron/mediamtx:1.15.1-ffmpeg`, service `mediamtx`, config `mediamtx/mediamtx.yml`). It accepts `live/<name>` publishers (`<name>` is 1 to 32 characters of a-z, 0-9, `_`, `-`, with an optional `-cc` suffix for the captioned copy), asks the API whether each publish may start, and tells the API when a stream becomes ready or drops, so the API can start or stop the radio pull.
+
+- **Publish auth:** MediaMTX calls `POST /internal/mediamtx/auth` for every publish and read, with the `secret` query parameter set to `HOOK_SECRET`. The API route is added in a later step (P3.2); until it exists the API answers 404 and MediaMTX refuses every publish, so do not deploy this compose change on its own.
+- **Ready hooks:** `runOnReady` and `runOnNotReady` call `/internal/mediamtx/ready` and `/internal/mediamtx/notready` with `secret` and `path` (routes added in P3.3; until then the hook calls get 404 and are harmless). They run through `wget` inside the MediaMTX container, which is why the `-ffmpeg` image is used (the plain image has no shell).
+- **Ports:**
+
+| Port | Where | Purpose |
+|---|---|---|
+| 1935 (RTMP) | host, `${RTMP_BIND:-127.0.0.1}:${RTMP_PORT:-1935}` | publishers push here |
+| 8554 (RTSP) | internal network only | the API pulls `live/<name>` for the radio (`RADIO_SOURCE_URL_TEMPLATE`) |
+| 9997 (API) | internal network only, not published | MediaMTX control API |
+
+HLS, WebRTC, SRT and metrics are off in MediaMTX. The relay still serves HLS itself.
+
+- **Secrets:** `HOOK_SECRET` (generate with `openssl rand -hex 32`) is required for the auth and ready hooks; set it in `.env` for both the `api` and `mediamtx` services. The compose file also sets `MTX_AUTHHTTPADDRESS` so the secret reaches MediaMTX from the environment, not from the YAML.
+- **Rollback to nginx-rtmp:** the nginx service keeps its RTMP listener on the internal network. To go back, restore a `"${RTMP_PORT:-1935}:1935"` port mapping on the `nginx` service, remove the `mediamtx` service's RTMP port, and point the publisher at the nginx port again. Do not run both on the same host port.
+- **Status:** not yet verified against a live publisher or the real MediaMTX container (no Docker daemon in the build environment); only the config's YAML syntax and the compose files were checked.
+
 ## Environment variables
 
 All variables have sensible defaults so the system works out of the box.
@@ -455,7 +475,8 @@ Copy `.env.example` to `.env` and override only what you need.
 
 | Variable | Default | Description |
 |---|---|---|
-| `RTMP_PORT` | `1935` | Host port mapped to the RTMP ingest (container port 1935) |
+| `RTMP_PORT` | `1935` | Host port mapped to the MediaMTX RTMP ingest (container port 1935) |
+| `RTMP_BIND` | `127.0.0.1` | Host address the RTMP port is bound to (`0.0.0.0` for direct publishers) |
 | `HTTP_PORT` | `8080` | Host port mapped to the HTTP server (container port 8080) |
 
 ### API server (`server/index.js`)
