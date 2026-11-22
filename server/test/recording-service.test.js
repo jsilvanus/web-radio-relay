@@ -126,6 +126,9 @@ function setup(options = {}) {
   const spoolDir = path.join(dir, 'spool');
   const db = openStore(':memory:').db;
   const s3 = options.noS3 ? null : fakeS3();
+  if (s3 && options.presign) {
+    s3.presignGet = (key, ttl) => `https://s3.example.com/bucket/${key}?X-Amz-Expires=${ttl}&X-Amz-Signature=sig`;
+  }
   const clock = { t: T0 };
   const fake = fakeSpawn({ throwOnSpawn: options.throwOnSpawn });
   const timers = fakeTimers();
@@ -138,6 +141,8 @@ function setup(options = {}) {
     rtspBase: RTSP,
     spoolMaxBytes: options.spoolMaxBytes ?? 1024 ** 3,
     uploadIntervalMs: 7000,
+    handoffTtlSeconds: 3600,
+    relayName: options.relayName ?? '',
     backoffMs: 2000,
     liveAfterMs: 5000,
     stopGraceMs: 3000,
@@ -571,5 +576,89 @@ test('routes: stop with nothing recording is 404', async () => {
     });
   } finally {
     env.cleanup();
+  }
+});
+
+// ---- handoff (P5.4) -----------------------------------------------------------
+
+test('stop writes handoff.json next to session.json when the S3 client can presign', async () => {
+  const env = setup({ presign: true, relayName: 'relay-a' });
+  try {
+    addEvents(env.db, 'main', [
+      { type: 'caption', lang: 'fi', startedAt: T0 + 1000, endedAt: T0 + 3000, payload: { text: 'Hei' } },
+      { type: 'section', startedAt: T0 + 2000, payload: { title: 'Alku' } },
+    ], T0);
+    const { sessionId } = env.service.start('main');
+    writeSegment(env, sessionId, 0);
+    writeSegment(env, sessionId, 1);
+    env.clock.t = T0 + 70_000;
+    await env.service.stop('main');
+
+    const prefix = `recordings/main/${sessionId}/`;
+    assert.deepEqual(env.s3.puts.filter((k) => k.endsWith('handoff.json')), [`${prefix}handoff.json`]);
+    const handoff = JSON.parse(env.s3.objects.get(`${prefix}handoff.json`).toString('utf8'));
+    assert.equal(handoff.version, 1);
+    assert.equal(handoff.origin.instance, 'relay-a');
+    assert.equal(handoff.origin.groupId, `main-${sessionId}`);
+    assert.deepEqual(handoff.feeds[0].parts.map((p) => [p.startMs, p.durationMs]), [[0, 60000], [60000, 10000]]);
+    assert.equal(handoff.feeds[0].parts[0].ref, `https://s3.example.com/bucket/${prefix}000000.mp4?X-Amz-Expires=3600&X-Amz-Signature=sig`);
+    assert.equal(handoff.captions[0].language, 'fi');
+    assert.deepEqual(handoff.markers, [{ atMs: 2000, kind: 'cue', label: 'Alku' }]);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('without presign support stop writes no handoff.json and the existing files are unchanged', async () => {
+  const env = setup();
+  try {
+    const { sessionId } = env.service.start('main');
+    writeSegment(env, sessionId, 0);
+    env.clock.t = T0 + 5000;
+    await env.service.stop('main');
+    assert.equal(env.s3.puts.some((k) => k.endsWith('handoff.json')), false);
+    assert.equal(env.s3.puts.some((k) => k.endsWith('session.json')), true);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('routes: handoff needs control scope, answers 404/409/503 and builds a fresh manifest when stopped', async () => {
+  const env = setup({ presign: true });
+  const plain = setup();
+  try {
+    const control = createToken(env.db, { scopes: ['stream:main:control'] }, T0).token;
+    const view = createToken(env.db, { scopes: ['stream:main:view'] }, T0).token;
+    const { sessionId } = env.service.start('main');
+    writeSegment(env, sessionId, 0);
+    const url = (base, id = sessionId) => `${base}/api/v1/streams/main/recordings/${id}/handoff`;
+
+    await withServer(env, async (base) => {
+      assert.equal((await fetch(url(base))).status, 401);
+      assert.equal((await fetch(url(base), { headers: bearer(view) })).status, 403);
+      assert.equal((await fetch(url(base, 'nope'), { headers: bearer(control) })).status, 404);
+      assert.equal((await fetch(url(base, 'bad.id'), { headers: bearer(control) })).status, 400);
+      assert.equal((await fetch(url(base), { headers: bearer(control) })).status, 409, 'still recording');
+
+      env.clock.t = T0 + 5000;
+      await env.service.stop('main');
+      const ok = await fetch(url(base), { headers: bearer(control) });
+      assert.equal(ok.status, 200);
+      const manifest = await ok.json();
+      assert.equal(manifest.version, 1);
+      assert.equal(manifest.feeds[0].parts.length, 1);
+      assert.match(manifest.feeds[0].parts[0].ref, /X-Amz-Expires=3600/);
+      assert.equal((await fetch(url(base), { headers: bearer('admin-test-token') })).status, 200);
+    });
+
+    // A client that cannot presign: 503.
+    const row = env.db.prepare('SELECT * FROM recordings WHERE id = ?').get(sessionId);
+    plain.db.prepare('INSERT INTO streams (name, created_at) VALUES (?, ?)').run('main', T0);
+    plain.db.prepare('INSERT INTO recordings (id, stream, started_at, ended_at, state, manifest_json) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(sessionId, 'main', row.started_at, row.ended_at, 'stopped', row.manifest_json);
+    assert.throws(() => plain.service.handoff('main', sessionId), (err) => err.statusCode === 503);
+  } finally {
+    env.cleanup();
+    plain.cleanup();
   }
 });

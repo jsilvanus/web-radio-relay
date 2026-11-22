@@ -54,5 +54,13 @@ export function createRecordingRouter({ service, adminToken = '', db }) {
     res.json({ stream: req.params.name, recordings: service.list(req.params.name) });
   }));
 
+  router.get('/api/v1/streams/:name/recordings/:sessionId/handoff', requireControl, checkStream, route((req, res) => {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(req.params.sessionId)) {
+      res.status(400).json({ error: 'invalid session id' });
+      return;
+    }
+    res.json(service.handoff(req.params.name, req.params.sessionId));
+  }));
+
   return router;
 }

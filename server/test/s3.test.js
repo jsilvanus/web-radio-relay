@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
-import { signV4, createS3Client, s3ConfigFromEnv } from '../lib/s3.js';
+import { signV4, presignV4, createS3Client, s3ConfigFromEnv } from '../lib/s3.js';
 
 const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 const SECRET = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
@@ -213,4 +213,64 @@ test('s3ConfigFromEnv reads the variables, defaults the region and prefix, and i
   assert.equal(s3ConfigFromEnv({ S3_BUCKET: 'media' }), null);
   assert.equal(s3ConfigFromEnv({ S3_ENDPOINT: 'https://s3.example.com' }), null);
   assert.equal(s3ConfigFromEnv({}), null);
+});
+
+// ---- presigned URLs (P5.4) ---------------------------------------------------
+
+// AWS documentation vector: "Authenticating Requests: Using Query Parameters" (GET Object test.txt, 86400 s).
+test('presignV4 matches the AWS documentation query-authentication example', () => {
+  const url = presignV4({
+    method: 'GET',
+    url: 'https://examplebucket.s3.amazonaws.com/test.txt',
+    accessKeyId: ACCESS,
+    secretAccessKey: SECRET,
+    region: 'us-east-1',
+    now: new Date('2013-05-24T00:00:00Z'),
+    expiresSeconds: 86400,
+  });
+  assert.equal(
+    url,
+    'https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256' +
+      '&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request' +
+      '&X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host' +
+      '&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404',
+  );
+});
+
+test('presignV4 rejects an expiry outside 1..604800', () => {
+  const base = { url: 'https://h.example.com/k', accessKeyId: ACCESS, secretAccessKey: SECRET, region: 'us-east-1', now: new Date(0) };
+  for (const expiresSeconds of [0, 604801, 1.5, undefined]) {
+    assert.throws(() => presignV4({ ...base, expiresSeconds }), RangeError);
+  }
+});
+
+test('presignGet uses the prefix, path style and publicEndpoint, never the secret, and makes no request', () => {
+  let calls = 0;
+  const client = createS3Client({
+    endpoint: 'http://minio:9000/',
+    publicEndpoint: 'https://s3.example.com',
+    bucket: 'media',
+    accessKeyId: 'id',
+    secretAccessKey: 'super-secret',
+    prefix: 'relay/',
+    fetchImpl: async () => { calls++; return new Response('', { status: 200 }); },
+    now: () => new Date('2026-11-22T10:00:00Z'),
+  });
+  const url = new URL(client.presignGet('recordings/main/s 1/000000.mp4', 3600));
+  assert.equal(url.origin, 'https://s3.example.com');
+  assert.equal(url.pathname, '/media/relay/recordings/main/s%201/000000.mp4');
+  assert.equal(url.searchParams.get('X-Amz-Expires'), '3600');
+  assert.equal(url.searchParams.get('X-Amz-Date'), '20261122T100000Z');
+  assert.match(url.searchParams.get('X-Amz-Signature'), /^[0-9a-f]{64}$/);
+  assert.equal(url.href.includes('super-secret'), false);
+  assert.equal(calls, 0);
+
+  const internal = createS3Client({ endpoint: 'http://minio:9000', bucket: 'media', accessKeyId: 'id', secretAccessKey: 's' });
+  assert.equal(new URL(internal.presignGet('a.txt', 60)).origin, 'http://minio:9000');
+});
+
+test('s3ConfigFromEnv adds publicEndpoint only when S3_PUBLIC_ENDPOINT is set', () => {
+  const env = { S3_ENDPOINT: 'http://minio:9000', S3_BUCKET: 'b' };
+  assert.equal('publicEndpoint' in s3ConfigFromEnv(env), false);
+  assert.equal(s3ConfigFromEnv({ ...env, S3_PUBLIC_ENDPOINT: ' https://s3.example.com ' }).publicEndpoint, 'https://s3.example.com');
 });

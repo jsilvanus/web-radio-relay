@@ -9,6 +9,7 @@
  *   recordings/<stream>/<sessionId>/<NNNNNN>.mp4
  *   recordings/<stream>/<sessionId>/sidecars/<name>
  *   recordings/<stream>/<sessionId>/session.json
+ *   recordings/<stream>/<sessionId>/handoff.json   (Saarnavideo manifest with presigned URLs, when the S3 client can presign)
  *
  * States: recording | degraded | failed | stopping | stopped | interrupted.
  *  - degraded: the spool of all sessions is over spoolMaxBytes. Recording goes on;
@@ -31,6 +32,7 @@ import { recorderArgs, closedSegments } from './recorder-args.js';
 import { DEFAULT_RTSP_BASE, assertDirectory, assertStreamName } from './ffmpeg-input.js';
 import { rangeEvents } from './event-store.js';
 import { buildSidecars } from './sidecars.js';
+import { buildHandoffManifest } from './handoff-manifest.js';
 import { redact } from './redact.js';
 
 export const RECORDING_STATES = ['recording', 'degraded', 'failed', 'stopping', 'stopped', 'interrupted'];
@@ -95,6 +97,8 @@ export function createRecordingService({
   rtspBase = DEFAULT_RTSP_BASE,
   spoolMaxBytes = 2 * 1024 ** 3,
   uploadIntervalMs = 5000,
+  handoffTtlSeconds = 86400,
+  relayName = '',
   backoffMs = 2000,
   maxBackoffMs = 60000,
   liveAfterMs = 5000,
@@ -290,6 +294,19 @@ export function createRecordingService({
     s.nextSegment = Math.max(s.nextSegment, n + 1);
   }
 
+  /** Handoff manifest with presigned URLs, or null when the recording has no segments. */
+  function buildHandoffFor(session, segments, sidecars, events) {
+    if (segments.length === 0) return null;
+    return buildHandoffManifest({
+      session,
+      segments,
+      sidecars,
+      events,
+      urlFor: (key) => s3.presignGet(key, handoffTtlSeconds),
+      relayName: relayName || undefined,
+    });
+  }
+
   async function finalize(s) {
     const events = rangeEvents(db, { stream: s.stream, fromMs: s.startedAt, toMs: s.endedAt + 1 });
     const langs = [...new Set(events
@@ -313,6 +330,15 @@ export function createRecordingService({
     };
     const manifestJson = `${JSON.stringify(manifest, null, 2)}\n`;
     await s3.putObject(`${prefix}session.json`, manifestJson, { contentType: 'application/json' });
+    if (typeof s3.presignGet === 'function') {
+      const handoff = buildHandoffFor(
+        { stream: s.stream, sessionId: s.sessionId, startedAt: s.startedAt, endedAt: s.endedAt },
+        manifest.segments, manifest.sidecars, events,
+      );
+      if (handoff) {
+        await s3.putObject(`${prefix}handoff.json`, `${JSON.stringify(handoff, null, 2)}\n`, { contentType: 'application/json' });
+      }
+    }
     s.finalized = true;
     s.state = 'stopped';
     dbUpdate(s, { state: 'stopped', endedAt: s.endedAt, manifestJson });
@@ -464,6 +490,30 @@ export function createRecordingService({
       });
   }
 
+  /**
+   * Handoff manifest of a stopped recording with fresh presigned URLs (the
+   * stored handoff.json has the URLs of the stop time, which may have expired).
+   * Errors carry a statusCode: 404 unknown session, 409 not stopped or no
+   * segments, 503 no S3 or an S3 client that cannot presign.
+   */
+  function handoff(stream, sessionId) {
+    const row = db
+      .prepare('SELECT id, started_at, ended_at, state, manifest_json FROM recordings WHERE stream = ? AND id = ?')
+      .get(stream, sessionId);
+    if (!row) throw httpError(404, 'no such recording');
+    if (!s3 || typeof s3.presignGet !== 'function') throw httpError(503, 'handoff needs S3 with presigned URLs');
+    let saved = null;
+    try { saved = row.manifest_json ? JSON.parse(row.manifest_json) : null; } catch { saved = null; }
+    if (row.state !== 'stopped' || !saved) throw httpError(409, 'the recording has not been stopped and finalized yet');
+    const events = rangeEvents(db, { stream, fromMs: row.started_at, toMs: row.ended_at + 1 });
+    const manifest = buildHandoffFor(
+      { stream, sessionId, startedAt: row.started_at, endedAt: row.ended_at },
+      saved.segments ?? [], saved.sidecars ?? [], events,
+    );
+    if (!manifest) throw httpError(409, 'the recording has no segments');
+    return manifest;
+  }
+
   /** Runs one uploader pass now (the timer does the same every uploadIntervalMs). Resolves when it is done. */
   async function flush(stream) {
     const s = sessions.get(stream);
@@ -493,5 +543,5 @@ export function createRecordingService({
     await Promise.allSettled(waits);
   }
 
-  return { start, stop, state, list, flush, close, spoolDir: root, spoolMaxBytes };
+  return { start, stop, state, list, handoff, flush, close, spoolDir: root, spoolMaxBytes };
 }

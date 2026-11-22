@@ -134,12 +134,62 @@ export function signV4({
 }
 
 /**
+ * Presigned URL (SigV4 query authentication) for one request, e.g. a GET that
+ * a third party can follow without credentials until it expires. Only the
+ * host header is signed; the payload is UNSIGNED-PAYLOAD.
+ *
+ * @param {object} p
+ * @param {string} [p.method='GET']
+ * @param {string} p.url              absolute URL (an existing query is kept and signed)
+ * @param {number} p.expiresSeconds   1..604800
+ * @returns {string} the URL with the X-Amz-* query parameters and X-Amz-Signature
+ */
+export function presignV4({
+  method = 'GET',
+  url,
+  accessKeyId,
+  secretAccessKey,
+  region,
+  service = 's3',
+  now,
+  expiresSeconds,
+}) {
+  if (!Number.isInteger(expiresSeconds) || expiresSeconds < 1 || expiresSeconds > 604800) {
+    throw new RangeError('expiresSeconds must be an integer from 1 to 604800');
+  }
+  const target = new URL(url);
+  const date = amzDate(now);
+  const day = date.slice(0, 8);
+  const scope = `${day}/${region}/${service}/aws4_request`;
+  target.searchParams.set('X-Amz-Algorithm', ALGORITHM);
+  target.searchParams.set('X-Amz-Credential', `${accessKeyId}/${scope}`);
+  target.searchParams.set('X-Amz-Date', date);
+  target.searchParams.set('X-Amz-Expires', String(expiresSeconds));
+  target.searchParams.set('X-Amz-SignedHeaders', 'host');
+
+  const query = canonicalQuery(target.searchParams);
+  const canonicalRequest = [
+    method.toUpperCase(),
+    canonicalPath(target.pathname),
+    query,
+    `host:${target.host}\n`,
+    'host',
+    'UNSIGNED-PAYLOAD',
+  ].join('\n');
+  const stringToSign = [ALGORITHM, date, scope, sha256Hex(canonicalRequest)].join('\n');
+  const kSigning = hmac(hmac(hmac(hmac('AWS4' + secretAccessKey, day), region), service), 'aws4_request');
+  const signature = createHmac('sha256', kSigning).update(stringToSign).digest('hex');
+  return `${target.origin}${canonicalPath(target.pathname)}?${query}&X-Amz-Signature=${signature}`;
+}
+
+/**
  * Builds an S3 client bound to one bucket.
  *
  * putObject(key, body, { contentType }) -> { etag }
  * headObject(key) -> { size, etag } | null (404)
  * getObject(key) -> Buffer | null (404)
  * deleteObject(key) -> undefined (204 and 404 are both fine)
+ * presignGet(key, expiresSeconds) -> URL string (SigV4 query auth, on publicEndpoint when set)
  */
 export function createS3Client({
   endpoint,
@@ -148,6 +198,7 @@ export function createS3Client({
   accessKeyId,
   secretAccessKey,
   prefix = '',
+  publicEndpoint = '',
   fetchImpl = fetch,
   now = () => new Date(),
 }) {
@@ -156,6 +207,12 @@ export function createS3Client({
   function objectUrl(key) {
     const fullKey = prefix + key;
     return `${base}/${rfc3986(bucket)}/${fullKey.split('/').map(rfc3986).join('/')}`;
+  }
+
+  /** Same as objectUrl, on the endpoint that outside readers can reach (publicEndpoint, else endpoint). */
+  function publicObjectUrl(key) {
+    const root = String(publicEndpoint || endpoint).replace(/\/+$/, '');
+    return root + objectUrl(key).slice(base.length);
   }
 
   async function request(method, key, body, extraHeaders = {}) {
@@ -216,6 +273,22 @@ export function createS3Client({
       return Buffer.from(await res.arrayBuffer());
     },
 
+    /**
+     * Presigned GET URL of an object (key relative to the prefix). Pure: no request is made.
+     * The URL carries the signature in its query and nothing else secret.
+     */
+    presignGet(key, expiresSeconds) {
+      return presignV4({
+        method: 'GET',
+        url: publicObjectUrl(key),
+        accessKeyId,
+        secretAccessKey,
+        region,
+        now: now(),
+        expiresSeconds,
+      });
+    },
+
     async deleteObject(key) {
       const res = await request('DELETE', key);
       if (res.ok || res.status === 404) return;
@@ -233,6 +306,7 @@ export function s3ConfigFromEnv(env) {
   const endpoint = env.S3_ENDPOINT?.trim();
   const bucket = env.S3_BUCKET?.trim();
   if (!endpoint || !bucket) return null;
+  const publicEndpoint = env.S3_PUBLIC_ENDPOINT?.trim();
   return {
     endpoint,
     bucket,
@@ -240,5 +314,6 @@ export function s3ConfigFromEnv(env) {
     accessKeyId: env.S3_ACCESS_KEY_ID ?? '',
     secretAccessKey: env.S3_SECRET_ACCESS_KEY ?? '',
     prefix: env.S3_PREFIX?.trim() || 'relay/',
+    ...(publicEndpoint ? { publicEndpoint } : {}),
   };
 }

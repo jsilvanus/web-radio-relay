@@ -39,6 +39,7 @@
  *   PUT  /api/v1/streams/{s}/config  set part of it: visibleLanguages, radio, videoHls, recordOnLive, publicGraphics, viewerKey
  *   POST   /api/v1/streams/{s}/recordings             start recording the stream to S3 (202, needs S3)
  *   DELETE /api/v1/streams/{s}/recordings/current     stop it: uploads the rest, writes session.json
+ *   GET    /api/v1/streams/{s}/recordings/{id}/handoff  Saarnavideo handoff manifest with fresh presigned URLs
  *   GET    /api/v1/streams/{s}/recordings             recordings of the stream from the database
  *
  * Internal (not in openapi.json, not proxied by nginx):
@@ -58,6 +59,7 @@
  *   RELAY_DB_PATH            SQLite database file (default: /var/lib/relay/relay.db)
  *   ASSET_DIR                Image asset directory when S3 is unset     (default: /var/lib/relay/assets)
  *   S3_ENDPOINT, S3_BUCKET   Store image assets in S3 (see README)      (default: unset = local ASSET_DIR)
+ *   S3_PUBLIC_ENDPOINT, HANDOFF_URL_TTL_SECONDS, RELAY_NAME  Handoff manifest URLs and instance name (see README)
  *   RECORDING_SPOOL_DIR      Local spool for recorder segments           (default: /var/lib/relay/spool)
  *   RECORDING_SPOOL_MAX_BYTES  Spool size above which recordings are degraded (default: 2 GiB)
  *   DELAY_SECONDS            Listener delay for audio and captions     (default: 0)
@@ -262,6 +264,11 @@ const recordings = createRecordingService({
   s3: s3Client,
   spoolDir: RECORDING_SPOOL_DIR,
   spoolMaxBytes: RECORDING_SPOOL_MAX_BYTES,
+  handoffTtlSeconds: (() => {
+    const n = Number(process.env.HANDOFF_URL_TTL_SECONDS);
+    return Number.isInteger(n) && n >= 1 && n <= 604800 ? n : 86400;
+  })(),
+  relayName: process.env.RELAY_NAME || '',
   rtspBase: process.env.MEDIAMTX_RTSP_BASE || DEFAULT_RTSP_BASE,
   spawnProcess: spawn,
   log: (msg) => console.log(msg),

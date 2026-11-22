@@ -651,6 +651,26 @@ export const operations = [
     ]
   },
   {
+    "operationId": "getRecordingHandoff",
+    "method": "GET",
+    "path": "/api/v1/streams/{name}/recordings/{sessionId}/handoff",
+    "summary": "Handoff manifest of a stopped recording for Saarnavideo",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "sessionId",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
     "operationId": "stopRecording",
     "method": "DELETE",
     "path": "/api/v1/streams/{name}/recordings/current",
