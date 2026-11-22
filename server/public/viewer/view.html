@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="fi" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tekstitykset</title>
+<link rel="stylesheet" href="/viewer/viewer.css">
+</head>
+<body class="vw-page">
+<main class="vw-view">
+  <div class="vw-bar">
+    <span><span class="vw-dot" id="dot"></span><span id="status" aria-live="polite">Yhdistetään…</span></span>
+  </div>
+  <div id="panel"></div>
+</main>
+<script type="module">
+  // /view/<key>: live captions for visitors in the building (no listener delay).
+  // Query: theme=dark|light, fontsize=<rem>, lang=<code>|original|all.
+  import {
+    mountViewerPanel, connectViewer, readStoredLang, storeLang, keepScreenAwake,
+  } from '/viewer/viewer-app.js';
+  import { parseTheme, parseFontSize, parseLang, isViewerKey } from '/viewer/viewer-utils.js';
+
+  const key = location.pathname.split('/')[2] || '';
+  const params = new URLSearchParams(location.search);
+  const theme = parseTheme(params.get('theme'));
+  document.documentElement.dataset.theme = theme;
+  const fontSize = parseFontSize(params.get('fontsize'), 2);
+  const urlLang = parseLang(params.get('lang'));
+  const lang = urlLang || readStoredLang();
+
+  const statusEl = document.getElementById('status');
+  const dot = document.getElementById('dot');
+  const setStatus = (text, on) => {
+    statusEl.textContent = text;
+    dot.classList.toggle('on', on);
+  };
+
+  if (!isViewerKey(key)) {
+    setStatus('Virheellinen tunnus', false);
+  } else {
+    document.title = key;
+    const panel = mountViewerPanel(document.getElementById('panel'), {
+      section: true,
+      graphics: true,
+      captions: true,
+      picker: true,
+      lang,
+      fontSize,
+      onLangChange: storeLang,
+    });
+    connectViewer({
+      key,
+      mode: 'live',
+      panel,
+      onStatus: (state) => setStatus(state === 'connected' ? 'Yhteys päällä' : 'Yhdistetään uudelleen…', state === 'connected'),
+    });
+    keepScreenAwake();
+  }
+</script>
+</body>
+</html>

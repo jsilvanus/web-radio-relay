@@ -14,6 +14,9 @@
  *   GET  /api/captions               captions released for listeners (?lang=&from=&limit=)
  *   GET  /api/openapi.json           the OpenAPI document of this API
  *   GET  /listen                     listener page: audio plus captions
+ *   GET  /view/{key}                 church visitors' caption page (live, phone first)
+ *   GET  /embed/viewer?key=          caption-only overlay for an iframe
+ *   GET  /watch?stream=              delayed video player with the viewer panels
  *   GET  /api/v1/viewer/{key}        LCYT-compatible viewer SSE (?mode=live|delayed), public, CORS *
  *
  * Control (Bearer RELAY_API_TOKEN, see docs/API.md):
@@ -838,6 +841,21 @@ app.get('/listen', (_req, res) => {
   res.set('Cache-Control', 'no-cache');
   res.type('html').sendFile(path.join(__dirname, 'public', 'listen.html'));
 });
+
+// Viewer pages (P7b): the church page, the caption embed and the watch player, plus their assets.
+// Registered before the /:stream catch-all below, or /watch would be taken for a stream name.
+const VIEWER_DIR = path.join(__dirname, 'public', 'viewer');
+app.use('/viewer', express.static(VIEWER_DIR, { maxAge: '5m' }));
+function viewerPage(file, keyOf) {
+  return (req, res) => {
+    if (!isValidStreamName(keyOf(req))) return res.status(404).send('Not Found');
+    res.set('Cache-Control', 'no-cache');
+    res.type('html').sendFile(path.join(VIEWER_DIR, file));
+  };
+}
+app.get('/view/:key', viewerPage('view.html', (req) => req.params.key));
+app.get('/embed/viewer', viewerPage('embed.html', (req) => String(req.query.key ?? '')));
+app.get('/watch', viewerPage('watch.html', (req) => String(req.query.stream ?? '')));
 
 // Root path redirects to /listen
 app.get('/', (_req, res) => {

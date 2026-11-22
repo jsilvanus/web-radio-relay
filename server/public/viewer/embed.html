@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="fi" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tekstitykset</title>
+<link rel="stylesheet" href="/viewer/viewer.css">
+</head>
+<body class="vw-page vw-embed-body">
+<main class="vw-embed" id="panel"></main>
+<script type="module">
+  // /embed/viewer?key=<stream>: caption-only overlay for an iframe.
+  // Query: key (required), theme=dark|light, fontsize=<rem>, lang=<code>|original|all, bg=transparent.
+  import { mountViewerPanel, connectViewer } from '/viewer/viewer-app.js';
+  import { parseTheme, parseFontSize, parseLang, isViewerKey } from '/viewer/viewer-utils.js';
+
+  const params = new URLSearchParams(location.search);
+  const key = params.get('key') || '';
+  document.documentElement.dataset.theme = parseTheme(params.get('theme'));
+  if (params.get('bg') === 'transparent') document.body.classList.add('vw-transparent');
+
+  if (isViewerKey(key)) {
+    document.title = key;
+    const panel = mountViewerPanel(document.getElementById('panel'), {
+      section: false,
+      graphics: false,
+      captions: true,
+      picker: false,
+      lang: parseLang(params.get('lang')),
+      fontSize: parseFontSize(params.get('fontsize'), 1.1),
+    });
+    connectViewer({ key, mode: 'live', panel });
+  }
+</script>
+</body>
+</html>

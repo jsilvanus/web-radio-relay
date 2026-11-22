@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Radio</title>
+<link rel="stylesheet" href="/viewer/viewer.css">
 <style>
   :root {
     --bg: #f6f6f4; --fg: #1d1d1b; --muted: #6b6b66; --accent: #1f6feb; --line: #d9d9d4;
@@ -61,6 +62,8 @@
 </div>
 
 <audio id="audio" controls preload="none"></audio>
+
+<div id="viewer-panels" aria-label="Osio ja laulu"></div>
 
 <section id="captions" aria-live="polite" aria-label="Tekstitykset">
   <p class="empty" id="empty">Tekstitykset näkyvät tässä, kun lähetys on käynnissä.</p>
@@ -128,6 +131,7 @@
           streamSelect.appendChild(none);
         }
         titleEl.textContent = streamSelect.value || 'Radio';
+        announceStream();
       })
       .catch(function () { setStatus('Ei yhteyttä palvelimeen'); });
   }
@@ -177,8 +181,15 @@
   });
 
   // Switching stream: stop the old audio, clear the captions, start again.
+  // The viewer panels (section heading, hymn) are a module below; they follow the stream through this event.
+  function announceStream() {
+    document.documentElement.dataset.relayStream = streamSelect.value;
+    document.dispatchEvent(new CustomEvent('relay:stream', { detail: { stream: streamSelect.value } }));
+  }
+
   streamSelect.addEventListener('change', function () {
     titleEl.textContent = streamSelect.value;
+    announceStream();
     pollToken++;
     cursor = null;
     clearCaptions();
@@ -257,6 +268,21 @@
 
   loadStreams();
 })();
+</script>
+<script type="module">
+  // Section heading and hymn/picture panel from the delayed viewer stream (captions stay on the poll above).
+  import { mountViewerPanel, connectViewer } from '/viewer/viewer-app.js';
+  var root = document.getElementById('viewer-panels');
+  var conn = null;
+  function follow(stream) {
+    if (conn) { conn.close(); conn = null; }
+    root.textContent = '';
+    if (!/^[a-z0-9_-]{1,32}$/.test(stream || '')) return;
+    var panel = mountViewerPanel(root, { section: true, graphics: true, captions: false, picker: false });
+    conn = connectViewer({ key: stream, mode: 'delayed', panel });
+  }
+  document.addEventListener('relay:stream', function (e) { follow(e.detail && e.detail.stream); });
+  follow(document.documentElement.dataset.relayStream);
 </script>
 </body>
 </html>

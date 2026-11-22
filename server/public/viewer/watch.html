@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="fi" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lähetys</title>
+<link rel="stylesheet" href="/viewer/viewer.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.13/hls.min.js" crossorigin="anonymous"></script>
+</head>
+<body class="vw-page">
+<main class="vw-watch">
+  <video id="video" controls playsinline aria-label="Lähetys"></video>
+  <div class="vw-bar">
+    <span><span class="vw-dot" id="dot"></span><span id="status" aria-live="polite">Yhdistetään…</span></span>
+  </div>
+  <div id="panel"></div>
+</main>
+<script type="module">
+  // /watch?stream=<s>: the stream's delayed video with captions, section and graphics beside it.
+  // Query: stream (required), lang=<code>|original|all, theme=dark|light.
+  import { mountViewerPanel, connectViewer, playHls, readStoredLang, storeLang } from '/viewer/viewer-app.js';
+  import { parseTheme, parseLang, isViewerKey } from '/viewer/viewer-utils.js';
+
+  const params = new URLSearchParams(location.search);
+  const stream = params.get('stream') || '';
+  document.documentElement.dataset.theme = parseTheme(params.get('theme'));
+  const statusEl = document.getElementById('status');
+  const dot = document.getElementById('dot');
+  const setStatus = (text, on) => {
+    statusEl.textContent = text;
+    dot.classList.toggle('on', on);
+  };
+
+  if (!isViewerKey(stream)) {
+    setStatus('Lähetystä ei valittu', false);
+  } else {
+    document.title = stream;
+    const video = document.getElementById('video');
+    playHls(video, `/api/streams/${encodeURIComponent(stream)}/hls/master.m3u8`, () => {
+      setStatus('Video ei käynnisty tällä selaimella', false);
+    });
+    const panel = mountViewerPanel(document.getElementById('panel'), {
+      section: true,
+      graphics: true,
+      captions: true,
+      picker: true,
+      lang: parseLang(params.get('lang')) || readStoredLang(),
+      onLangChange: storeLang,
+    });
+    connectViewer({
+      key: stream,
+      mode: 'delayed',
+      panel,
+      onStatus: (state) => setStatus(state === 'connected' ? 'Yhteys päällä' : 'Yhdistetään uudelleen…', state === 'connected'),
+    });
+  }
+</script>
+</body>
+</html>
