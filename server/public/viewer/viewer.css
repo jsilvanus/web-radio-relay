@@ -135,12 +135,19 @@ body.vw-page.vw-transparent { background: transparent; }
   font-size: var(--vw-caption-size);
   line-height: 1.35;
   font-weight: 600;
+  overflow-wrap: break-word;
+  hyphens: auto;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
 .vw-cols {
   display: flex;
-  gap: 12px;
+  flex-direction: column;
+  gap: 16px;
   width: 100%;
+}
+/* Side by side only where a column is wide enough for whole words. */
+@media (min-width: 720px) {
+  .vw-cols { flex-direction: row; gap: 24px; }
 }
 .vw-col { flex: 1; min-width: 0; }
 .vw-col-label {
