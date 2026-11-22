@@ -208,7 +208,7 @@ Install the following on your server / dev machine:
 | **Nginx** (with `nginx-rtmp-module`) | 1.24 | See below |
 | **FFmpeg** (with `libmp3lame`, `aac`) | 4.4 | See below |
 | **Node.js** | 18 | [nodejs.org](https://nodejs.org/) |
-| **npm** | 9 | Bundled with Node.js |
+| **pnpm** | 10 | `corepack enable` (the version is pinned in the root `package.json`) |
 
 #### Install Nginx with RTMP module
 
@@ -299,13 +299,16 @@ LOG_DIR=/home/me/radio/logs
 
 ### 3 · Install and start the API server
 
-```bash
-cd server
-npm install
+The repo is a pnpm workspace (`server`, `cli`, `dev`). Install once from the root:
 
+```bash
+corepack enable
+pnpm install            # from the repo root
+
+cd server
 # Load env vars from .env, then start
 export $(grep -v '^#' ../.env | xargs)
-npm start
+pnpm start
 # API is now listening on port 3000 (or the PORT you set in .env)
 ```
 
@@ -413,9 +416,8 @@ so the API server and nginx must be running first (either via Docker or bare met
 ### Start
 
 ```bash
-cd dev
-npm install
-npm run dev
+cd dev          # after the root `pnpm install`
+pnpm run dev
 # → http://localhost:5173
 ```
 
@@ -425,7 +427,7 @@ Open `http://localhost:5173` in your browser.
 
 ```bash
 cd dev
-npm run build
+pnpm run build
 # Output is in dev/dist/ — web-radio-relay.js is copied there automatically
 ```
 
@@ -606,7 +608,7 @@ constant time and is never accepted in the URL.
 `cli/` is a zero-dependency command-line client generated from `server/openapi.json`:
 
 ```bash
-cd cli && npm run generate            # regenerate after changing openapi.json
+cd cli && pnpm run generate           # regenerate after changing openapi.json
 export TUBERADIO_URL=https://radio.example.com TUBERADIO_TOKEN=...
 node src/cli.js ops                   # list operations
 node src/cli.js getStatus
