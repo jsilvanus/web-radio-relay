@@ -443,6 +443,26 @@ export const operations = [
     ]
   },
   {
+    "operationId": "streamViewerEvents",
+    "method": "GET",
+    "path": "/api/v1/viewer/{key}",
+    "summary": "LCYT-compatible viewer stream (SSE), public",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "key",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "mode",
+        "in": "query",
+        "required": false
+      }
+    ]
+  },
+  {
     "operationId": "getCaptionSource",
     "method": "GET",
     "path": "/api/v1/captions/source",

@@ -128,3 +128,39 @@ export function rangeEvents(db, { stream, fromMs, toMs }) {
 export function prune(db, olderThanMs) {
   return db.prepare('DELETE FROM events WHERE started_at < ?').run(olderThanMs).changes;
 }
+
+/** Largest event id stored on any stream (0 when the table is empty). */
+export function maxEventId(db) {
+  return db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM events').get().id;
+}
+
+/** Events of one stream with an id above `afterId`, oldest id first: the rows one addEvents call just wrote. */
+export function eventsAfterId(db, stream, afterId) {
+  return db
+    .prepare(`SELECT ${COLUMNS} FROM events WHERE stream = ? AND id > ? ORDER BY id`)
+    .all(stream, afterId)
+    .map(toEvent);
+}
+
+/** The stored caption with this sourceKey on the stream, or null. */
+export function captionBySourceKey(db, stream, sourceKey) {
+  const row = db
+    .prepare(`SELECT ${COLUMNS} FROM events WHERE stream = ? AND type = 'caption' AND source_key = ? LIMIT 1`)
+    .get(stream, sourceKey);
+  return row ? toEvent(row) : null;
+}
+
+/**
+ * Translations that name a caption (payload.sourceKey, see events.js), oldest first.
+ * Scans the stream's translations; the table is pruned, so this stays small.
+ */
+export function translationsOf(db, stream, sourceKey) {
+  return db
+    .prepare(
+      `SELECT ${COLUMNS} FROM events
+       WHERE stream = ? AND type = 'translation' AND json_extract(payload_json, '$.sourceKey') = ?
+       ORDER BY id`,
+    )
+    .all(stream, sourceKey)
+    .map(toEvent);
+}
