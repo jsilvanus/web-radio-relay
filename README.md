@@ -491,6 +491,8 @@ Copy `.env.example` to `.env` and override only what you need.
 | `RELAY_API_TOKEN` | *(unset)* | Bearer token for the control API (`/api/v1/*`). Unset means those routes answer 503 (fail closed). Generate with `openssl rand -hex 32` |
 | `RELAY_DB_PATH` | `/var/lib/relay/relay.db` | SQLite database file (streams, tokens, destinations, recordings, events). The parent directory is created when missing. Compose mounts the `relay-data` volume at `/var/lib/relay`. Tests use `:memory:` |
 | `RELAY_SECRET_KEY` | *(unset)* | 64 hex chars, `openssl rand -hex 32`; encrypts destination stream keys at rest; never commit |
+| `MAX_DESTINATIONS_PER_STREAM` | `6` | Most egress destinations one stream may have; a create beyond it answers 409 |
+| `MEDIAMTX_RTSP_BASE` | `rtsp://mediamtx:8554` | RTSP base the egress children pull from (`<base>/live/<stream>[-cc]`) |
 | `HOOK_SECRET` | *(unset)* | Secret for the internal hooks (see "Internal hooks"). Unset means they answer 503 |
 | `PUBLISH_AUTH` | `off` | `on` makes nginx-rtmp publishes need a token with `stream:<name>:publish`; any other value allows all |
 | `RELAY_INTERNAL_CIDRS` | `172.16.0.0/12,10.0.0.0/8,127.0.0.0/8` | IPv4 networks whose MediaMTX reads need no token |
@@ -642,6 +644,14 @@ The admin token (`RELAY_API_TOKEN`) can issue narrower tokens, stored in SQLite 
 - `GET /api/v1/tokens` (admin) lists tokens without values; `DELETE /api/v1/tokens/{id}` (admin) revokes one (204, or 404 for an unknown id).
 - A token gets `401` when it is unknown, revoked or expired, and `403` when its scopes do not allow the route. The routes that exist today still accept only `RELAY_API_TOKEN`.
 - With `RELAY_API_TOKEN` unset and no stored token, the scoped checks answer `503`, as before.
+
+**Egress destinations.** A stream can be pushed to up to `MAX_DESTINATIONS_PER_STREAM` RTMP(S) destinations (`youtube`, `facebook` or `rtmp`). Scope `stream:<name>:control`, `view` is not enough.
+
+- `GET /api/v1/streams/{name}/destinations` lists them with their egress `state`; `POST` adds one; `PATCH /api/v1/streams/{name}/destinations/{id}` changes it; `DELETE` removes it (stops its child).
+- `POST .../destinations/{id}/start` and `/stop` run or stop one ffmpeg child that copies the relay stream (no re-encoding) to the destination.
+- Keys are stored encrypted with `RELAY_SECRET_KEY` and are never returned (`hasKey` only). Without that variable a destination with a key answers 503.
+- States: `off`, `starting`, `live` (5 s without exit), `retrying` (restart with backoff 2 s doubling to 60 s), `failed` (ffmpeg could not be started; no automatic retry). The stderr tail is redacted.
+- Starting a destination does not yet happen on its own when the stream goes live; that wiring is a later task.
 
 **Timeline events.** Every event is stored in SQLite (`events` table) per stream with a `sourceKey` for de-duplication per stream and type. Final pigateway transcripts are stored as `caption` events with `sourceKey` = `epoch:seq`, next to the caption buffer. Pigateway `translation` events become `translation` events (`sourceKey` = `<sourceKey>:<lang>`); `rundown` snapshots become a `section` event whenever the section title changes; unknown pigateway events are ignored and counted in `mapper.unknown`. The push route above takes the same shape from senders that do not go through pigateway.
 

@@ -339,5 +339,115 @@ export const operations = [
     "bearer": true,
     "body": null,
     "parameters": []
+  },
+  {
+    "operationId": "listDestinations",
+    "method": "GET",
+    "path": "/api/v1/streams/{name}/destinations",
+    "summary": "List a stream's egress destinations with their state",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "createDestination",
+    "method": "POST",
+    "path": "/api/v1/streams/{name}/destinations",
+    "summary": "Add an egress destination to a stream",
+    "bearer": true,
+    "body": "application/json",
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "deleteDestination",
+    "method": "DELETE",
+    "path": "/api/v1/streams/{name}/destinations/{id}",
+    "summary": "Remove an egress destination",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "id",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "updateDestination",
+    "method": "PATCH",
+    "path": "/api/v1/streams/{name}/destinations/{id}",
+    "summary": "Change an egress destination",
+    "bearer": true,
+    "body": "application/json",
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "id",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "startDestination",
+    "method": "POST",
+    "path": "/api/v1/streams/{name}/destinations/{id}/start",
+    "summary": "Start the egress child of one destination",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "id",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "stopDestination",
+    "method": "POST",
+    "path": "/api/v1/streams/{name}/destinations/{id}/stop",
+    "summary": "Stop the egress child of one destination",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "id",
+        "in": "path",
+        "required": true
+      }
+    ]
   }
 ];
