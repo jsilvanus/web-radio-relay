@@ -100,3 +100,41 @@ export function revokeToken(db, id, nowMs) {
     .run(nowMs, id);
   return res.changes > 0;
 }
+
+/**
+ * Validates the body of POST /api/v1/tokens.
+ * `scopes` 1..10 valid scopes; `expiresInSeconds` integer 60..31536000 (optional);
+ * `label` string up to 64 characters (optional). Returns { ok, error, value }.
+ */
+export function validateTokenRequest(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, error: 'body must be a JSON object' };
+  }
+  const { scopes, expiresInSeconds, label } = body;
+  if (!Array.isArray(scopes) || scopes.length < 1 || scopes.length > 10) {
+    return { ok: false, error: 'scopes must be an array of 1 to 10 scopes' };
+  }
+  const bad = scopes.find((s) => !isValidScope(s));
+  if (bad !== undefined) {
+    return { ok: false, error: `invalid scope: ${String(bad)}` };
+  }
+  if (expiresInSeconds !== undefined) {
+    if (!Number.isInteger(expiresInSeconds) || expiresInSeconds < 60 || expiresInSeconds > 31_536_000) {
+      return { ok: false, error: 'expiresInSeconds must be an integer from 60 to 31536000' };
+    }
+  }
+  if (label !== undefined) {
+    if (typeof label !== 'string' || label.length > 64) {
+      return { ok: false, error: 'label must be a string of at most 64 characters' };
+    }
+  }
+  return {
+    ok: true,
+    error: null,
+    value: {
+      scopes: [...new Set(scopes)],
+      expiresInSeconds: expiresInSeconds ?? undefined,
+      label: label ?? undefined,
+    },
+  };
+}

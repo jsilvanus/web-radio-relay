@@ -601,6 +601,16 @@ constant time and is never accepted in the URL.
 
 **Rate limits:** public routes 60 requests per minute per IP; `/api/v1` 600 per minute per IP.
 
+### Scoped tokens
+
+The admin token (`RELAY_API_TOKEN`) can issue narrower tokens, stored in SQLite (`RELAY_DB_PATH`) as SHA-256 hashes only. The value is shown once, when it is created.
+
+- Scopes: `admin`, or `stream:<name>:(publish|data|control|view)` where `<name>` is `a-z 0-9 _ -`, up to 32 characters.
+- `POST /api/v1/tokens` (admin) with `{ "scopes": [...], "expiresInSeconds": 60..31536000, "label": "phone" }` returns `201 { id, token, scopes, expiresAt, label }`.
+- `GET /api/v1/tokens` (admin) lists tokens without values; `DELETE /api/v1/tokens/{id}` (admin) revokes one (204, or 404 for an unknown id).
+- A token gets `401` when it is unknown, revoked or expired, and `403` when its scopes do not allow the route. The routes that exist today still accept only `RELAY_API_TOKEN`.
+- With `RELAY_API_TOKEN` unset and no stored token, the scoped checks answer `503`, as before.
+
 ### Listener page (`/listen`)
 
 `GET /listen` serves a page with the delayed audio, a play button, a language choice (fi, sv, en or all) and captions shown as the relay releases them. The page is one HTML file (`server/public/listen.html`) that loads hls.js from cdnjs. Safari plays the HLS stream natively. Open it with `?lang=sv` to start in Swedish.

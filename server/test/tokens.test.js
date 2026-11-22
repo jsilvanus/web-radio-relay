@@ -12,6 +12,7 @@ import {
   newTokenId,
   revokeToken,
   scopeAllows,
+  validateTokenRequest,
 } from '../lib/tokens.js';
 
 const NOW = 1_700_000_000_000;
@@ -201,4 +202,49 @@ test('revoking twice keeps the first revocation time', () => {
   } finally {
     close();
   }
+});
+
+test('validateTokenRequest accepts a minimal and a full body', () => {
+  const min = validateTokenRequest({ scopes: ['stream:keskus:publish'] });
+  assert.equal(min.ok, true);
+  assert.deepEqual(min.value.scopes, ['stream:keskus:publish']);
+  const full = validateTokenRequest({
+    scopes: ['stream:keskus:publish', 'stream:keskus:data', 'stream:keskus:data'],
+    expiresInSeconds: 43200,
+    label: 'phone',
+  });
+  assert.equal(full.ok, true);
+  assert.deepEqual(full.value.scopes, ['stream:keskus:publish', 'stream:keskus:data']);
+  assert.equal(full.value.expiresInSeconds, 43200);
+  assert.equal(full.value.label, 'phone');
+});
+
+test('validateTokenRequest rejects bad bodies', () => {
+  const bad = [
+    null,
+    'text',
+    [],
+    {},
+    { scopes: [] },
+    { scopes: 'admin' },
+    { scopes: Array.from({ length: 11 }, (_, i) => `stream:s${i}:view`) },
+    { scopes: ['stream:Keskus:data'] },
+    { scopes: ['admin'], expiresInSeconds: 59 },
+    { scopes: ['admin'], expiresInSeconds: 31536001 },
+    { scopes: ['admin'], expiresInSeconds: 60.5 },
+    { scopes: ['admin'], expiresInSeconds: '3600' },
+    { scopes: ['admin'], label: 'x'.repeat(65) },
+    { scopes: ['admin'], label: 7 },
+  ];
+  for (const body of bad) {
+    const res = validateTokenRequest(body);
+    assert.equal(res.ok, false, JSON.stringify(body));
+    assert.equal(typeof res.error, 'string');
+  }
+});
+
+test('validateTokenRequest accepts the range limits', () => {
+  assert.equal(validateTokenRequest({ scopes: ['admin'], expiresInSeconds: 60 }).ok, true);
+  assert.equal(validateTokenRequest({ scopes: ['admin'], expiresInSeconds: 31536000 }).ok, true);
+  assert.equal(validateTokenRequest({ scopes: ['admin'], label: 'x'.repeat(64) }).ok, true);
 });

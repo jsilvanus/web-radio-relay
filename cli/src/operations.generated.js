@@ -107,6 +107,39 @@ export const operations = [
     "parameters": []
   },
   {
+    "operationId": "listTokens",
+    "method": "GET",
+    "path": "/api/v1/tokens",
+    "summary": "List tokens (admin only)",
+    "bearer": true,
+    "body": null,
+    "parameters": []
+  },
+  {
+    "operationId": "createToken",
+    "method": "POST",
+    "path": "/api/v1/tokens",
+    "summary": "Issue a scoped token (admin only)",
+    "bearer": true,
+    "body": "application/json",
+    "parameters": []
+  },
+  {
+    "operationId": "revokeToken",
+    "method": "DELETE",
+    "path": "/api/v1/tokens/{id}",
+    "summary": "Revoke a token (admin only)",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
     "operationId": "recordStreamSession",
     "method": "POST",
     "path": "/api/v1/stats/session",
