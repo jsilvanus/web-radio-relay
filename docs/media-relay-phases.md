@@ -252,36 +252,38 @@ Sync points: **S1** after P3 (one real publish through MediaMTX on a test host w
 
 ## Task checklist
 
-| Task | Mark | Needs |
-|---|---|---|
-| P1.1 pnpm | H | |
-| P1.2 redact | H | |
-| P1.3 store | H+ | |
-| P1.4 secret box | H | |
-| P2.1 token logic | H | P1.3 |
-| P2.2 token API | H | P2.1 |
-| P2.3 nginx publish check | H | P2.2 |
-| P3.1 MediaMTX compose | H | P2.3 |
-| P3.2 auth hook | H | P3.1 |
-| P3.3 ready hooks | H+ | P3.2 |
-| P3.4 probe | H | P3.3 |
-| P4.1 destinations | H | P3.3, P1.4 |
-| P4.2 egress args | H | P1.2 |
-| P4.3 egress supervisor | H+ | P4.1, P4.2 |
-| P4.4 ffmpeg test | H | P4.3 |
-| P5.1 S3 client | H+ | P1.1 |
-| P5.2 recorder args | H | P3.3 |
-| P5.3 recording service | H+ | P5.1, P5.2, P4.3, P7.4 |
-| P5.4 handoff manifest | S | P5.3 |
-| P6.1 HLS packager | H | P4.3 |
-| P6.2 delayed video | H | P6.1 |
-| P6.3 VTT renditions | H+ | P6.2, P7.1 |
-| P7.1 events | H | P1.3 |
-| P7.2 ingest | H | P7.1 |
-| P7.3 assets | H | P7.1, P5.1 |
-| P7.4 sidecars | H | P7.1 |
-| P7.5 viewer SSE | H+ | P7.1 |
-| P7b viewer pages | H+ | P7.5, P6.3 |
-| P8 translations | H | P7.2, P7.5 |
-| P9.1 to P9.6 captioner | S/H+ | E1, P3.3, P7.1 |
-| P10 public ingest | H | P3.2 |
+All tasks were built on one branch (PR #13) instead of one PR each. Nothing has run against a real MediaMTX, S3, YouTube or Facebook; sync points S1 to S3 are still human checks.
+
+| Task | Mark | Needs | Status (2026-11-22) |
+|---|---|---|---|
+| P1.1 pnpm | H | | done (PR #13) |
+| P1.2 redact | H | | done (PR #13) |
+| P1.3 store | H+ | | done (PR #13) |
+| P1.4 secret box | H | | done (PR #13) |
+| P2.1 token logic | H | P1.3 | done (PR #13) |
+| P2.2 token API | H | P2.1 | done (PR #13) |
+| P2.3 nginx publish check | H | P2.2 | done (PR #13) |
+| P3.1 MediaMTX compose | H | P2.3 | done (PR #13) |
+| P3.2 auth hook | H | P3.1 | done (PR #13) |
+| P3.3 ready hooks | H+ | P3.2 | done (PR #13) |
+| P3.4 probe | H | P3.3 | done (PR #13) |
+| P4.1 destinations | H | P3.3, P1.4 | done (PR #13) |
+| P4.2 egress args | H | P1.2 | done (PR #13) |
+| P4.3 egress supervisor | H+ | P4.1, P4.2 | done (PR #13) |
+| P4.4 ffmpeg test | H | P4.3 | done (PR #13) |
+| P5.1 S3 client | H+ | P1.1 | done (PR #13) |
+| P5.2 recorder args | H | P3.3 | done (PR #13) |
+| P5.3 recording service | H+ | P5.1, P5.2, P4.3, P7.4 | done (PR #13) |
+| P5.4 handoff manifest | S | P5.3 | done (PR #13) |
+| P6.1 HLS packager | H | P4.3 | done (PR #13) |
+| P6.2 delayed video | H | P6.1 | done (PR #13) |
+| P6.3 VTT renditions | H+ | P6.2, P7.1 | done (PR #13) |
+| P7.1 events | H | P1.3 | done (PR #13) |
+| P7.2 ingest | H | P7.1 | done (PR #13) |
+| P7.3 assets | H | P7.1, P5.1 | done (PR #13) |
+| P7.4 sidecars | H | P7.1 | done (PR #13) |
+| P7.5 viewer SSE | H+ | P7.1 | done (PR #13) |
+| P7b viewer pages | H+ | P7.5, P6.3 | done (PR #13) |
+| P8 translations | H | P7.2, P7.5 | done (PR #13) |
+| P9.1 to P9.6 captioner | S/H+ | E1, P3.3, P7.1 | P9.3 FLV and P9.4 hold buffer done; P9.1, P9.2, P9.5, P9.6 wait for E1 |
+| P10 public ingest | H | P3.2 | done (PR #13) |
