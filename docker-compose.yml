@@ -36,10 +36,17 @@ services:
     command: ["/mediamtx.yml"]
     ports:
       - "${RTMP_BIND:-127.0.0.1}:${RTMP_PORT:-1935}:1935"   # RTMP ingest (publishers)
+      - "${RTMPS_BIND:-127.0.0.1}:${RTMPS_PORT:-1937}:1937"   # RTMPS (only listens when MTX_RTMPENCRYPTION=optional)
+      - "${SRT_BIND:-127.0.0.1}:${SRT_PORT:-8890}:8890/udp"   # SRT (only listens when MTX_SRT=yes)
     environment:
       HOOK_SECRET: "${HOOK_SECRET:-}"
       # Overrides authHTTPAddress in mediamtx.yml so the secret comes from the env.
       MTX_AUTHHTTPADDRESS: "http://api:3000/internal/mediamtx/auth?secret=${HOOK_SECRET:-}"
+      # Optional ingest, off by default. Set in .env (the deploy workflow writes these
+      # from RTMPS_ENABLED / SRT_ENABLED). RTMPS needs the certificate files mounted
+      # at /certs (the deploy compose does that; this local file does not).
+      MTX_RTMPENCRYPTION: "${MTX_RTMPENCRYPTION:-no}"
+      MTX_SRT: "${MTX_SRT:-no}"
     volumes:
       - ./mediamtx/mediamtx.yml:/mediamtx.yml:ro
     depends_on:

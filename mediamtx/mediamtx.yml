@@ -18,13 +18,28 @@ metrics: no
 rtmp: yes
 rtmpAddress: :1935
 
+# RTMPS (TLS) listener. The file keeps encryption off: MediaMTX refuses to start with
+# encryption on when the certificate files are missing. docker-compose sets
+# MTX_RTMPENCRYPTION=optional (both RTMP and RTMPS listen) only when the deploy
+# variable RTMPS_ENABLED is on, and the certificate directory is mounted at /certs.
+# Keys verified against the MediaMTX v1.15.1 sample configuration (mediamtx.yml).
+rtmpEncryption: "no"
+rtmpsAddress: :1937
+rtmpServerKey: /certs/rtmps.key
+rtmpServerCert: /certs/rtmps.crt
+
 rtsp: yes
 rtspAddress: :8554
 rtspTransports: [tcp]
 
 hls: no
 webrtc: no
+
+# SRT (UDP) listener. Off in the file; docker-compose sets MTX_SRT=yes only when the
+# deploy variable SRT_ENABLED is on. Publishers authenticate with the streamid
+# (publish:live/<name>:<user>:<token>); see README "Publishing from a phone".
 srt: no
+srtAddress: :8890
 
 authMethod: http
 authHTTPAddress: "http://api:3000/internal/mediamtx/auth?secret=${HOOK_SECRET}"
