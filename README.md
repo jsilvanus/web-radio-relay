@@ -500,6 +500,7 @@ Copy `.env.example` to `.env` and override only what you need.
 | `DEFAULT_STREAM` | `stream` | Stream used by the legacy routes without a name (`/api/status`, `/api/captions`) |
 | `HLS_SEGMENT_PREFIX` | `/hls/` | URL prefix of segment files named in the delayed playlist (nginx serves `/hls/`) |
 | `RADIO_ON_READY` | `on` | `off` keeps the MediaMTX ready hook from starting the radio pull (the input is still probed). Per-stream settings do not exist yet |
+| `PUBLIC_MEDIA_RATE_LIMIT` | `6000` | Requests per minute per IP for playback routes (`/api/streams/*/hls/...`, `/api/hls/...`, `/api/assets/...`, `/api/v1/viewer/...`). Visitors on one church Wi-Fi share an address; other public API routes keep 60/min |
 | `VIDEO_SUB_LANGS` | `fi` | Comma-separated subtitle renditions in the master playlist: language tags, or `original` for the caption events themselves. Other languages use the translation events |
 | `VIDEO_BANDWIDTH` | `2500000` | `BANDWIDTH` of the video variant in the master playlist (bits per second) |
 | `VIDEO_RESOLUTION` | `1280x720` | `RESOLUTION` of the video variant in the master playlist |

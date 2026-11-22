@@ -232,9 +232,24 @@ const controlLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later.' },
 });
 
-// The public viewer stream (P7.5) is not control traffic: it uses the public limiter instead (see below).
+// Playback traffic (HLS playlists, segments' captions, images, the viewer stream) comes
+// from many visitors behind one address (the church Wi-Fi), so it gets its own, much
+// higher limit per IP instead of the 60/min API limit.
+const mediaLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Math.max(60, Number(process.env.PUBLIC_MEDIA_RATE_LIMIT) || 6000),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+});
+const isMediaPath = (p) => /^\/streams\/[^/]+\/hls\//.test(p) || p.startsWith('/hls/') || p.startsWith('/assets/');
+
+// The public viewer stream (P7.5) is not control traffic: it uses the media limiter instead (see below).
 app.use('/api/v1/', (req, res, next) => (req.path.startsWith('/viewer/') ? next() : controlLimiter(req, res, next)));
-app.use('/api/', (req, res, next) => (req.path.startsWith('/v1/') ? next() : apiLimiter(req, res, next)));
+app.use('/api/', (req, res, next) => {
+  if (req.path.startsWith('/v1/')) return next();
+  return isMediaPath(req.path) ? mediaLimiter(req, res, next) : apiLimiter(req, res, next);
+});
 app.use(express.json({ limit: '256kb' }));
 const requireToken = requireBearer(RELAY_API_TOKEN);
 /** Bearer token for GET /metrics (Prometheus scrape). Unset = /metrics answers 503. */
@@ -862,7 +877,7 @@ app.post('/api/v1/streams/:name/events', requireToken, streamFromRequest, (req, 
 
 // GET /api/v1/viewer/{key} — LCYT-compatible viewer SSE (plan P7.5). Public: no Bearer token, CORS *,
 // public rate limit. The key is the stream name for now (no per-stream viewer key yet).
-app.get('/api/v1/viewer/:key', apiLimiter, (req, res) => {
+app.get('/api/v1/viewer/:key', mediaLimiter, (req, res) => {
   const key = req.params.key;
   if (!isValidStreamName(key)) {
     return res.status(400).json({ error: 'Invalid viewer key: a stream name (a-z, 0-9, _ or -, up to 32 characters).' });
