@@ -71,6 +71,36 @@ export const operations = [
     ]
   },
   {
+    "operationId": "getAsset",
+    "method": "GET",
+    "path": "/api/assets/{assetId}",
+    "summary": "Serve one image asset by its id (public)",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "assetId",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "uploadStreamAsset",
+    "method": "POST",
+    "path": "/api/v1/streams/{name}/assets",
+    "summary": "Upload one image for a stream (content-addressed, deduplicated)",
+    "bearer": true,
+    "body": "image/png",
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
     "operationId": "getOpenApi",
     "method": "GET",
     "path": "/api/openapi.json",

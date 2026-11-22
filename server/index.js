@@ -33,6 +33,8 @@
  *   PUBLISH_AUTH             "on" makes /internal/publish-auth check tokens; anything else allows all (default: off)
  *   RELAY_INTERNAL_CIDRS     IPv4 CIDRs whose reads need no token (default: 172.16.0.0/12,10.0.0.0/8,127.0.0.0/8)
  *   RELAY_DB_PATH            SQLite database file (default: /var/lib/relay/relay.db)
+ *   ASSET_DIR                Image asset directory when S3 is unset     (default: /var/lib/relay/assets)
+ *   S3_ENDPOINT, S3_BUCKET   Store image assets in S3 (see README)      (default: unset = local ASSET_DIR)
  *   DELAY_SECONDS            Listener delay for audio and captions     (default: 0)
  *   DELAY_MAX_SECONDS        Largest delay the API accepts; sizes the ffmpeg playlist (default: 60)
  *   HLS_SEGMENT_PREFIX       URL prefix of segment files in playlists  (default: /hls/)
@@ -69,6 +71,9 @@ import { requireBearer, requireScope, tokensEqual } from './lib/auth.js';
 import { openStore } from './lib/store.js';
 import { createToken, findTokenByValue, listTokens, revokeToken, validateTokenRequest } from './lib/tokens.js';
 import { decide } from './lib/mediamtx-auth.js';
+import { createS3Client, s3ConfigFromEnv } from './lib/s3.js';
+import { createAssetStore } from './lib/assets.js';
+import { registerAssetRoutes } from './lib/asset-routes.js';
 import { buildDelayedPlaylist } from './lib/hls-delay.js';
 import { validateCaptionBody } from './lib/captions.js';
 import { isValidStreamName, StreamRegistry } from './lib/streams.js';
@@ -112,6 +117,10 @@ const RELAY_INTERNAL_CIDRS = (process.env.RELAY_INTERNAL_CIDRS || '172.16.0.0/12
 /** SQLite store: streams, scoped tokens, destinations, recordings, events */
 const store = openStore();
 const db = store.db;
+/** Directory for image assets when S3 is not configured (S3 wins when S3_ENDPOINT and S3_BUCKET are set) */
+const ASSET_DIR = process.env.ASSET_DIR || '/var/lib/relay/assets';
+const s3Config = s3ConfigFromEnv(process.env);
+const assetStore = createAssetStore({ s3: s3Config ? createS3Client(s3Config) : null, dir: ASSET_DIR });
 
 /** Stream used by the legacy routes (/api/status, /api/captions, /api/hls/...) */
 const DEFAULT_STREAM = process.env.DEFAULT_STREAM || 'stream';
@@ -640,6 +649,13 @@ app.get('/api/openapi.json', (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Image assets: upload per stream (scope stream:<name>:data, admin passes), public GET by id.
+// Registered before the catch-all stream redirect below.
+registerAssetRoutes(app, {
+  store: assetStore,
+  requireUpload: requireScope((req) => `stream:${req.params.name}:data`, { adminToken: RELAY_API_TOKEN, db }),
+});
+
 // GET /listen — the listener page: delayed audio plus captions in one view
 // ---------------------------------------------------------------------------
 app.get('/listen', (_req, res) => {
