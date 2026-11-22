@@ -2,10 +2,12 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isValidStreamName } from './streams.js';
+import { redact } from './redact.js';
 
+// Unparsable input is never echoed: it may still hold a secret.
 const redactUrl = (value) => {
-  try { const u = new URL(value); if (u.username) u.username = 'REDACTED'; if (u.password) u.password = 'REDACTED'; return u.toString(); }
-  catch { return '[invalid source URL]'; }
+  try { new URL(value); } catch { return '[invalid source URL]'; }
+  return redact(String(value));
 };
 
 export class StreamSupervisor {
