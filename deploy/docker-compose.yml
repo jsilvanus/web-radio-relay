@@ -69,6 +69,7 @@ services:
       - radio-archive:/var/www/radio/archive
       - radio-hidden-archive:/var/www/radio/hidden_archive
       - radio-stats:/var/www/radio/stats
+      - relay-data:/var/lib/relay
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/api/health', (r) => process.exit(r.statusCode===200?0:1)).on('error', () => process.exit(1))"]
       interval: 30s
@@ -86,6 +87,7 @@ volumes:
   radio-hidden-archive:
   radio-logs:
   radio-stats:
+  relay-data:
 
 networks:
   traefik-public:
