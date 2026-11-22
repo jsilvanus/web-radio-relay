@@ -170,6 +170,11 @@ export function listDestinations(db, stream) {
     .map(publicDestination);
 }
 
+/** Ids of the destinations a stream starts when it goes live: enabled and startWith 'stream'. */
+export function startableDestinationIds(db, stream) {
+  return listDestinations(db, stream).filter((d) => d.enabled && d.startWith === 'stream').map((d) => d.id);
+}
+
 /** Public view of one destination, or null. */
 export function getDestination(db, stream, id) {
   const row = findRow(db, stream, id);
