@@ -351,6 +351,7 @@ test('config: a caption in the only visible language has plain composedText', ()
   try {
     const bus = createEventBus();
     const clk = clock();
+    putConfig(db, STREAM, { visibleLanguages: ['fi'] });
     const { res } = open(db, bus, clk, { mode: 'live' });
     storeAndPublish(db, bus, STREAM, [ev({ type: 'caption', lang: 'fi', startedAt: T0, sourceKey: 'v3', payload: { text: 'Hyvää' } })], T0);
     storeAndPublish(db, bus, STREAM, [

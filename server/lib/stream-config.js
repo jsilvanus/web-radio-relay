@@ -9,7 +9,8 @@ import { LANG } from './events.js';
 import { isValidStreamName } from './streams.js';
 
 export const DEFAULT_CONFIG = Object.freeze({
-  visibleLanguages: Object.freeze(['fi']),
+  // '*' = every language that arrives (visitors pick their own on /view).
+  visibleLanguages: Object.freeze(['*']),
   radio: true,
   videoHls: false,
   recordOnLive: false,
@@ -41,8 +42,13 @@ function checkLanguages(value) {
   const out = [];
   for (const item of value) {
     const tag = typeof item === 'string' ? item.trim().toLowerCase() : '';
+    if (tag === '*') {
+      if (value.length !== 1) return { ok: false, error: 'visibleLanguages: "*" (all languages) must be the only entry' };
+      out.push(tag);
+      continue;
+    }
     if (!LANG.test(tag)) {
-      return { ok: false, error: 'visibleLanguages must contain language tags such as "fi" or "sv"' };
+      return { ok: false, error: 'visibleLanguages must contain language tags such as "fi" or "sv", or only "*"' };
     }
     if (out.includes(tag)) return { ok: false, error: 'visibleLanguages must not repeat a language' };
     out.push(tag);
@@ -144,4 +150,9 @@ export function resolveViewerStream(db, key) {
   if (!isValidStreamName(key)) return null;
   if (typeof storedFields(db, key).viewerKey === 'string') return null;
   return key;
+}
+
+/** True when a translation in `lang` is shown under this config ('*' shows all). */
+export function isLanguageVisible(config, lang) {
+  return config.visibleLanguages.includes('*') || config.visibleLanguages.includes(lang);
 }

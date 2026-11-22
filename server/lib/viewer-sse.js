@@ -15,7 +15,7 @@
 // Clock and timers are injected so tests run without waiting.
 
 import { captionBySourceKey, dueEvents, latestOfType, translationsOf } from './event-store.js';
-import { getConfig } from './stream-config.js';
+import { getConfig, isLanguageVisible } from './stream-config.js';
 import { toViewerCaption, toViewerGraphic, toViewerSection } from './viewer-payload.js';
 
 export const VIEWER_MODES = ['live', 'delayed'];
@@ -83,16 +83,17 @@ export function openViewerSession({
 
   /** The caption payload as it stands now: visible translations stored so far, section in effect at its time. */
   function captionData(row) {
-    const { visibleLanguages } = getConfig(db, stream);
+    const config = getConfig(db, stream);
+    const { visibleLanguages } = config;
     const translations = (row.sourceKey ? translationsOf(db, stream, row.sourceKey) : [])
-      .filter((t) => visibleLanguages.includes(t.lang));
+      .filter((t) => isLanguageVisible(config, t.lang));
     const section = latestOfType(db, stream, 'section', row.startedAt);
     return toViewerCaption({
       caption: row,
       translations: translations.map((t) => ({ lang: t.lang, text: t.payload.text })),
       section: section ? section.payload.title : undefined,
       sequence: row.id,
-      firstLang: visibleLanguages.find((lang) => lang !== row.lang),
+      firstLang: visibleLanguages.find((lang) => lang !== row.lang && lang !== '*'),
     });
   }
 
@@ -116,7 +117,7 @@ export function openViewerSession({
   }
 
   /** A translation in a language the stream does not show is not a reason to re-send a caption. */
-  const isVisible = (translation) => getConfig(db, stream).visibleLanguages.includes(translation.lang);
+  const isVisible = (translation) => isLanguageVisible(getConfig(db, stream), translation.lang);
 
   function onBus(rows) {
     for (const row of rows) {

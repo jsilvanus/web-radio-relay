@@ -717,7 +717,7 @@ The admin token (`RELAY_API_TOKEN`) can issue narrower tokens, stored in SQLite 
 
 | Field | Default | Effect |
 |---|---|---|
-| `visibleLanguages` | `["fi"]` | 1 to 10 language tags (lower case, e.g. `fi`, `sv-ax`), no repeats. Viewers get translations only in these languages. `composedText` shows the first of them that is not the caption's own language. |
+| `visibleLanguages` | `["*"]` | `["*"]` = every language that arrives (visitors pick their own on `/view`). Or 1 to 10 language tags (lower case, e.g. `fi`, `sv-ax`), no repeats: viewers then get translations only in these languages, and `composedText` shows the first of them that is not the caption's own language. |
 | `radio` | `true` | `false`: the MediaMTX ready hook does not start the radio pull for this stream. `RADIO_ON_READY=off` still wins. |
 | `publicGraphics` | `true` | `false`: graphic events are not sent to viewers (on connect or live). |
 | `viewerKey` | `null` | 8 to 64 characters `a-z 0-9 _ -`, unique across streams. When set, viewers connect to `/api/v1/viewer/{viewerKey}` and the stream name no longer opens the viewer. Clearing it (`null`) restores the name. A cleared key that is also a valid stream name (up to 32 characters) opens a stream of that name, so keep keys longer than that. |

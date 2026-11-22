@@ -2165,7 +2165,7 @@
       "put": {
         "operationId": "setStreamConfig",
         "summary": "Set part of the per-stream config",
-        "description": "Only the fields sent are changed. Unknown fields are refused (400). visibleLanguages: 1 to 10 language tags; the translations viewers get and the language shown under the original (composedText) follow it. radio: the MediaMTX ready hook starts the radio pull (RADIO_ON_READY=off still wins). publicGraphics: false keeps graphic events from viewers. videoHls and recordOnLive are stored for later phases and have no effect yet. viewerKey: null, or 8-64 characters a-z 0-9 _ -; the viewer then opens at /api/v1/viewer/{viewerKey} and the stream name no longer opens it. A viewerKey used by another stream answers 409.",
+        "description": "Only the fields sent are changed. Unknown fields are refused (400). visibleLanguages: [\"*\"] (default, every language) or 1 to 10 language tags; the translations viewers get and the language shown under the original (composedText) follow it. radio: the MediaMTX ready hook starts the radio pull (RADIO_ON_READY=off still wins). publicGraphics: false keeps graphic events from viewers. videoHls and recordOnLive are stored for later phases and have no effect yet. viewerKey: null, or 8-64 characters a-z 0-9 _ -; the viewer then opens at /api/v1/viewer/{viewerKey} and the stream name no longer opens it. A viewerKey used by another stream answers 409.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {

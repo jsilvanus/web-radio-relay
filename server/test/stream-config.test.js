@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { openStore } from '../lib/store.js';
 import {
+  isLanguageVisible,
   DEFAULT_CONFIG,
   StreamConfigError,
   getConfig,
@@ -26,7 +27,7 @@ function withDb(fn) {
 
 test('defaults are the P8 values', () => {
   assert.deepEqual(DEFAULT_CONFIG, {
-    visibleLanguages: ['fi'],
+    visibleLanguages: ['*'],
     radio: true,
     videoHls: false,
     recordOnLive: false,
@@ -82,7 +83,7 @@ test('getConfig: a stream without a row has the defaults, and arrays are copies'
     const config = getConfig(db, 'church');
     assert.deepEqual(config, DEFAULT_CONFIG);
     config.visibleLanguages.push('sv');
-    assert.deepEqual(getConfig(db, 'church').visibleLanguages, ['fi']);
+    assert.deepEqual(getConfig(db, 'church').visibleLanguages, ['*']);
   });
 });
 
@@ -117,7 +118,7 @@ test('persistence: a config written through one open store is read back after re
       const config = getConfig(reopened.db, 'church');
       assert.equal(config.radio, false);
       assert.equal(config.viewerKey, 'kirkko-viewer-1');
-      assert.deepEqual(config.visibleLanguages, ['fi']);
+      assert.deepEqual(config.visibleLanguages, ['*']);
     } finally {
       reopened.close();
     }
@@ -167,4 +168,11 @@ test('resolveViewerStream: a key that is neither a name nor a stored key gives n
     assert.equal(resolveViewerStream(db, 'Not A Key'), null);
     assert.equal(resolveViewerStream(db, undefined), null);
   });
+});
+
+test('visibleLanguages: "*" means every language and must stand alone', () => {
+  assert.equal(validateConfigPatch({ visibleLanguages: ['*'] }).ok, true);
+  assert.equal(validateConfigPatch({ visibleLanguages: ['*', 'fi'] }).ok, false);
+  assert.equal(isLanguageVisible({ visibleLanguages: ['*'] }, 'uk'), true);
+  assert.equal(isLanguageVisible({ visibleLanguages: ['fi'] }, 'uk'), false);
 });

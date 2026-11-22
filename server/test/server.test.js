@@ -738,7 +738,7 @@ test('config routes: GET and PUT per stream; the env token passes; no token is 4
   assert.equal(get.status, 200);
   const defaults = await get.json();
   assert.equal(defaults.stream, 'cfgone');
-  assert.deepEqual(defaults.config.visibleLanguages, ['fi']);
+  assert.deepEqual(defaults.config.visibleLanguages, ['*']);
   assert.equal(defaults.config.radio, true);
   assert.equal(defaults.config.viewerKey, null);
 
