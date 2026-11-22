@@ -469,6 +469,7 @@ Copy `.env.example` to `.env` and override only what you need.
 | `ARCHIVE_URL_PREFIX` | `/archive` | URL prefix for archive download links in `GET /api/archive` — set to your full public URL when behind a reverse proxy |
 | `RELAY_API_TOKEN` | *(unset)* | Bearer token for the control API (`/api/v1/*`). Unset means those routes answer 503 (fail closed). Generate with `openssl rand -hex 32` |
 | `RELAY_DB_PATH` | `/var/lib/relay/relay.db` | SQLite database file (streams, tokens, destinations, recordings, events). The parent directory is created when missing. Compose mounts the `relay-data` volume at `/var/lib/relay`. Tests use `:memory:` |
+| `RELAY_SECRET_KEY` | *(unset)* | 64 hex chars, `openssl rand -hex 32`; encrypts destination stream keys at rest; never commit |
 | `DELAY_SECONDS` | `0` | Listener delay for audio and captions. Changeable at runtime with `PUT /api/v1/delay` |
 | `DELAY_MAX_SECONDS` | `60` | Upper bound for the delay (see `HLS_LIST_SIZE` above) |
 | `DEFAULT_STREAM` | `stream` | Stream used by the legacy routes without a name (`/api/status`, `/api/captions`) |
