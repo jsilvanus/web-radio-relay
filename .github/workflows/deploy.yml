@@ -2,17 +2,19 @@ name: Deploy to church VPS
 
 # Runs after "Publish images" succeeds on main, or by hand with an image tag.
 # The `production-riihimaki` environment gates it behind its required reviewers.
-# Copies deploy/docker-compose.yml to the VPS, writes .env from the settings
+# Copies deploy/docker-compose.yml and mediamtx/mediamtx.yml to the VPS, writes .env from the settings
 # below, pulls the images and starts the stack as `appdeploy`.
 #
 # Environment secrets (Settings > Environments > production-riihimaki):
 #   SSH_PRIVATE_KEY, VM_HOST, VM_USER (appdeploy)
-#   RELAY_API_TOKEN, METRICS_BEARER_TOKEN
+#   RELAY_API_TOKEN, METRICS_BEARER_TOKEN, HOOK_SECRET (openssl rand -hex 32)
 #   GHCR_TOKEN   (optional: classic PAT with read:packages, only if the packages are private)
 # Environment variables:
 #   DEPLOY_PATH  (/opt/apps/web-radio-relay), DOMAIN
 #   VM_SSH_PORT (optional, 22), RTMP_BIND (optional), RTMP_PORT (optional),
 #   DELAY_SECONDS, DELAY_MAX_SECONDS (optional)
+#   MEDIAMTX (optional: 'on' starts the mediamtx service), MEDIAMTX_RTMP_BIND,
+#   MEDIAMTX_RTMP_PORT, RADIO_SOURCE_URL_TEMPLATE (optional)
 
 on:
   workflow_run:
@@ -45,14 +47,14 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
-      - name: Copy compose file
+      - name: Copy compose and MediaMTX files
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ vars.VM_SSH_PORT || 22 }}
-          source: deploy/docker-compose.yml
+          source: deploy/docker-compose.yml,mediamtx/mediamtx.yml
           target: ${{ vars.DEPLOY_PATH }}
           strip_components: 1
 
@@ -68,12 +70,17 @@ jobs:
           APP_RELAY_API_TOKEN: ${{ secrets.RELAY_API_TOKEN }}
           APP_METRICS_BEARER_TOKEN: ${{ secrets.METRICS_BEARER_TOKEN }}
           APP_GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          APP_HOOK_SECRET: ${{ secrets.HOOK_SECRET }}
+          APP_MEDIAMTX: ${{ vars.MEDIAMTX }}
+          APP_MEDIAMTX_RTMP_BIND: ${{ vars.MEDIAMTX_RTMP_BIND }}
+          APP_MEDIAMTX_RTMP_PORT: ${{ vars.MEDIAMTX_RTMP_PORT }}
+          APP_RADIO_SOURCE_URL_TEMPLATE: ${{ vars.RADIO_SOURCE_URL_TEMPLATE }}
         with:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ vars.VM_SSH_PORT || 22 }}
-          envs: APP_IMAGE_TAG,APP_DOMAIN,APP_RTMP_BIND,APP_RTMP_PORT,APP_DELAY_SECONDS,APP_DELAY_MAX_SECONDS,APP_RELAY_API_TOKEN,APP_METRICS_BEARER_TOKEN,APP_GHCR_TOKEN
+          envs: APP_IMAGE_TAG,APP_DOMAIN,APP_RTMP_BIND,APP_RTMP_PORT,APP_DELAY_SECONDS,APP_DELAY_MAX_SECONDS,APP_RELAY_API_TOKEN,APP_METRICS_BEARER_TOKEN,APP_GHCR_TOKEN,APP_HOOK_SECRET,APP_MEDIAMTX,APP_MEDIAMTX_RTMP_BIND,APP_MEDIAMTX_RTMP_PORT,APP_RADIO_SOURCE_URL_TEMPLATE
           script: |
             set -euo pipefail
             cd "${{ vars.DEPLOY_PATH }}"
@@ -89,6 +96,11 @@ jobs:
               [ -n "${APP_RTMP_PORT}" ]        && printf 'RTMP_PORT=%s\n'         "${APP_RTMP_PORT}"
               [ -n "${APP_DELAY_SECONDS}" ]    && printf 'DELAY_SECONDS=%s\n'     "${APP_DELAY_SECONDS}"
               [ -n "${APP_DELAY_MAX_SECONDS}" ] && printf 'DELAY_MAX_SECONDS=%s\n' "${APP_DELAY_MAX_SECONDS}"
+              [ -n "${APP_HOOK_SECRET}" ]      && printf 'HOOK_SECRET=%s\n'       "${APP_HOOK_SECRET}"
+              [ "${APP_MEDIAMTX}" = on ]       && printf 'COMPOSE_PROFILES=mediamtx\n'
+              [ -n "${APP_MEDIAMTX_RTMP_BIND}" ] && printf 'MEDIAMTX_RTMP_BIND=%s\n' "${APP_MEDIAMTX_RTMP_BIND}"
+              [ -n "${APP_MEDIAMTX_RTMP_PORT}" ] && printf 'MEDIAMTX_RTMP_PORT=%s\n' "${APP_MEDIAMTX_RTMP_PORT}"
+              [ -n "${APP_RADIO_SOURCE_URL_TEMPLATE}" ] && printf 'RADIO_SOURCE_URL_TEMPLATE=%s\n' "${APP_RADIO_SOURCE_URL_TEMPLATE}"
               true
             } > .env
             chmod 600 .env

@@ -450,8 +450,8 @@ Legacy RTMP publisher callbacks remain supported separately. Do not publish and 
 
 RTMP ingest runs in [MediaMTX](https://github.com/bluenviron/mediamtx) (`bluenviron/mediamtx:1.15.1-ffmpeg`, service `mediamtx`, config `mediamtx/mediamtx.yml`). It accepts `live/<name>` publishers (`<name>` is 1 to 32 characters of a-z, 0-9, `_`, `-`, with an optional `-cc` suffix for the captioned copy), asks the API whether each publish may start, and tells the API when a stream becomes ready or drops, so the API can start or stop the radio pull.
 
-- **Publish auth:** MediaMTX calls `POST /internal/mediamtx/auth` for every publish and read, with the `secret` query parameter set to `HOOK_SECRET`. The API route is added in a later step (P3.2); until it exists the API answers 404 and MediaMTX refuses every publish, so do not deploy this compose change on its own.
-- **Ready hooks:** `runOnReady` and `runOnNotReady` call `/internal/mediamtx/ready` and `/internal/mediamtx/notready` with `secret` and `path` (routes added in P3.3; until then the hook calls get 404 and are harmless). They run through `wget` inside the MediaMTX container, which is why the `-ffmpeg` image is used (the plain image has no shell).
+- **Publish auth:** MediaMTX calls `POST /internal/mediamtx/auth` for every publish and read, with the `secret` query parameter set to `HOOK_SECRET` (see [Internal hooks](#internal-hooks)).
+- **Ready hooks:** `runOnReady` and `runOnNotReady` call `/internal/mediamtx/ready` and `/internal/mediamtx/notready` with `secret` and `path` They run through `wget` inside the MediaMTX container, which is why the `-ffmpeg` image is used (the plain image has no shell).
 - **Ports:**
 
 | Port | Where | Purpose |
@@ -463,7 +463,7 @@ RTMP ingest runs in [MediaMTX](https://github.com/bluenviron/mediamtx) (`bluenvi
 HLS, WebRTC, SRT and metrics are off in MediaMTX. The relay still serves HLS itself.
 
 - **Secrets:** `HOOK_SECRET` (generate with `openssl rand -hex 32`) is required for the auth and ready hooks; set it in `.env` for both the `api` and `mediamtx` services. The compose file also sets `MTX_AUTHHTTPADDRESS` so the secret reaches MediaMTX from the environment, not from the YAML.
-- **Rollback to nginx-rtmp:** the nginx service keeps its RTMP listener on the internal network. To go back, restore a `"${RTMP_PORT:-1935}:1935"` port mapping on the `nginx` service, remove the `mediamtx` service's RTMP port, and point the publisher at the nginx port again. Do not run both on the same host port.
+- **Production switch (plan S1):** in `deploy/docker-compose.yml` the `mediamtx` service is in the compose profile `mediamtx` and stays off until the deploy workflow's `MEDIAMTX` variable is `on` (it then writes `COMPOSE_PROFILES=mediamtx` and `HOOK_SECRET` to `.env`). While nginx-rtmp keeps `RTMP_PORT`, MediaMTX listens on `MEDIAMTX_RTMP_BIND:MEDIAMTX_RTMP_PORT` (default `127.0.0.1:1936`), so both can run side by side for a test publish. To switch: point the publisher at MediaMTX with a `stream:<name>:publish` token, set `RADIO_SOURCE_URL_TEMPLATE=rtsp://mediamtx:8554/live/{name}`, then move the host RTMP port from nginx to MediaMTX. Rollback is the reverse. The local `docker-compose.yml` already runs MediaMTX on the RTMP port.
 - **Status:** not yet verified against a live publisher or the real MediaMTX container (no Docker daemon in the build environment); only the config's YAML syntax and the compose files were checked.
 
 ## Environment variables
