@@ -550,6 +550,189 @@
         "description": "Legacy route for the default stream. Use the /api/streams/{name} route instead."
       }
     },
+    "/api/assets/{assetId}": {
+      "get": {
+        "operationId": "getAsset",
+        "summary": "Serve one image asset by its id (public)",
+        "description": "Returns the stored PNG, JPEG or WebP bytes. The id is the SHA-256 of the bytes plus the extension, so the response never changes and is cached for a year.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "assetId",
+            "in": "path",
+            "required": true,
+            "description": "64 lower-case hex characters, a dot and png, jpg or webp.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}\\.(png|jpg|webp)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "public, max-age=31536000, immutable"
+                }
+              },
+              "X-Content-Type-Options": {
+                "schema": {
+                  "type": "string",
+                  "example": "nosniff"
+                }
+              }
+            },
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or malformed asset id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/assets": {
+      "post": {
+        "operationId": "uploadStreamAsset",
+        "summary": "Upload one image for a stream (content-addressed, deduplicated)",
+        "description": "Stores the image in S3 (assets/<assetId>) or in ASSET_DIR and returns its id. The Content-Type must match the bytes (image/jpeg for JPEG). Requires scope stream:<name>:data or the admin token. Identical bytes are stored once: reused is true on later uploads.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "maxLength": 10485760
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "maxLength": 10485760
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "maxLength": 10485760
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Stored (or already stored)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["assetId", "size", "reused"],
+                  "properties": {
+                    "assetId": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}\\.(png|jpg|webp)$"
+                    },
+                    "size": {
+                      "type": "integer"
+                    },
+                    "reused": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty body or invalid stream name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "The token's scopes do not allow stream:<name>:data"
+          },
+          "413": {
+            "description": "Image larger than 10 MB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Content-Type is not PNG, JPEG or WebP, or the bytes do not match it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "RELAY_API_TOKEN not set and no stored token exists"
+          }
+        }
+      }
+    },
     "/api/openapi.json": {
       "get": {
         "operationId": "getOpenApi",

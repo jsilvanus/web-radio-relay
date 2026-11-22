@@ -469,6 +469,7 @@ Copy `.env.example` to `.env` and override only what you need.
 | `ARCHIVE_URL_PREFIX` | `/archive` | URL prefix for archive download links in `GET /api/archive` — set to your full public URL when behind a reverse proxy |
 | `RELAY_API_TOKEN` | *(unset)* | Bearer token for the control API (`/api/v1/*`). Unset means those routes answer 503 (fail closed). Generate with `openssl rand -hex 32` |
 | `RELAY_DB_PATH` | `/var/lib/relay/relay.db` | SQLite database file (streams, tokens, destinations, recordings, events). The parent directory is created when missing. Compose mounts the `relay-data` volume at `/var/lib/relay`. Tests use `:memory:` |
+| `ASSET_DIR` | `/var/lib/relay/assets` | Directory for uploaded image assets when S3 is off. Created on the first upload. Files are named by their hash |
 | `RELAY_SECRET_KEY` | *(unset)* | 64 hex chars, `openssl rand -hex 32`; encrypts destination stream keys at rest; never commit |
 | `DELAY_SECONDS` | `0` | Listener delay for audio and captions. Changeable at runtime with `PUT /api/v1/delay` |
 | `DELAY_MAX_SECONDS` | `60` | Upper bound for the delay (see `HLS_LIST_SIZE` above) |
@@ -478,7 +479,7 @@ Copy `.env.example` to `.env` and override only what you need.
 | `GATEWAY_EVENTS_URL` | *(unset)* | Base URL of pigateway (e.g. `https://host:port`). When set, the relay pulls captions from `GET <url>/api/v1/events?types=transcript` (SSE) and adds them to the stream named by `GATEWAY_CAPTION_STREAM`. Unset disables the pull. `POST /api/v1/captions` keeps working either way |
 | `GATEWAY_TOKEN` | *(unset)* | Bearer token sent to pigateway. Never shown in status output |
 | `GATEWAY_CAPTION_STREAM` | `DEFAULT_STREAM` | Stream that receives the gateway's captions |
-| `S3_ENDPOINT` | *(unset)* | S3 API base URL (path-style: `<endpoint>/<bucket>/<key>`). With `S3_BUCKET` unset, S3 is off. Used by the recording client (`server/lib/s3.js`) |
+| `S3_ENDPOINT` | *(unset)* | S3 API base URL (path-style: `<endpoint>/<bucket>/<key>`). With `S3_BUCKET` unset, S3 is off. Used by the recording client and image assets (`server/lib/s3.js`) |
 | `S3_BUCKET` | *(unset)* | Bucket name. Required with `S3_ENDPOINT` |
 | `S3_REGION` | `us-east-1` | Region used in SigV4 signing |
 | `S3_ACCESS_KEY_ID` | *(unset)* | Access key id for SigV4 signing |
@@ -616,6 +617,17 @@ The admin token (`RELAY_API_TOKEN`) can issue narrower tokens, stored in SQLite 
 - `GET /api/v1/tokens` (admin) lists tokens without values; `DELETE /api/v1/tokens/{id}` (admin) revokes one (204, or 404 for an unknown id).
 - A token gets `401` when it is unknown, revoked or expired, and `403` when its scopes do not allow the route. The routes that exist today still accept only `RELAY_API_TOKEN`.
 - With `RELAY_API_TOKEN` unset and no stored token, the scoped checks answer `503`, as before.
+
+### Image assets
+
+Images (PNG, JPEG or WebP, up to 10 MB) are uploaded per stream and served by id. The id is the SHA-256 of the bytes plus the extension, so identical bytes are stored once.
+
+| Method and path | Purpose |
+|---|---|
+| `POST /api/v1/streams/{name}/assets` | Upload one image. Body is the raw image; `Content-Type` must be `image/png`, `image/jpeg` or `image/webp` and match the bytes. Scope `stream:<name>:data` (or the admin token). Returns `201 { assetId, size, reused }`. `415` for a type mismatch, `413` over 10 MB |
+| `GET /api/assets/{assetId}` | Serve the image (public). Cached for a year (`immutable`) |
+
+With `S3_ENDPOINT` and `S3_BUCKET` set, images go to `assets/<assetId>` in the bucket (under `S3_PREFIX`); otherwise to `ASSET_DIR`.
 
 ### Listener page (`/listen`)
 
