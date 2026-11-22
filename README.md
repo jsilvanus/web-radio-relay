@@ -499,7 +499,7 @@ Copy `.env.example` to `.env` and override only what you need.
 | `DELAY_MAX_SECONDS` | `60` | Upper bound for the delay (see `HLS_LIST_SIZE` above) |
 | `DEFAULT_STREAM` | `stream` | Stream used by the legacy routes without a name (`/api/status`, `/api/captions`) |
 | `HLS_SEGMENT_PREFIX` | `/hls/` | URL prefix of segment files named in the delayed playlist (nginx serves `/hls/`) |
-| `RADIO_ON_READY` | `on` | `off` keeps the MediaMTX ready hook from starting the radio pull (the input is still probed). Per-stream settings do not exist yet |
+| `RADIO_ON_READY` | `on` | `off` keeps the MediaMTX ready hook from starting the radio pull (the input is still probed). Otherwise a stream's `radio` setting decides (see "Per-stream config") |
 | `PUBLIC_MEDIA_RATE_LIMIT` | `6000` | Requests per minute per IP for playback routes (`/api/streams/*/hls/...`, `/api/hls/...`, `/api/assets/...`, `/api/v1/viewer/...`). Visitors on one church Wi-Fi share an address; other public API routes keep 60/min |
 | `VIDEO_SUB_LANGS` | `fi` | Comma-separated subtitle renditions in the master playlist: language tags, or `original` for the caption events themselves. Other languages use the translation events |
 | `VIDEO_BANDWIDTH` | `2500000` | `BANDWIDTH` of the video variant in the master playlist (bits per second) |
@@ -605,7 +605,7 @@ another `lang`.
 
 ### `GET /api/v1/viewer/{key}?mode=live|delayed`
 
-Public Server-Sent Events stream for viewer pages and the LCYT Android TV app (no token, `Access-Control-Allow-Origin: *`). The key is the stream name for now. `mode=live` (default) sends each timeline event as it is stored, for visitors in the building; `mode=delayed` releases events at `startedAt` plus the stream's listener delay, for remote listeners. Events: `connected`, `caption` (LCYT payload: `text`, `composedText`, `translations`, `codes.section`, `sequence`, `timestamp` without `Z`; a translation re-sends its caption with the same `sequence`), `section` and `graphic`. On connect the current section, graphic and caption are sent once. The payload builders are in `server/lib/viewer-payload.js`, the session in `server/lib/viewer-sse.js`.
+Public Server-Sent Events stream for viewer pages and the LCYT Android TV app (no token, `Access-Control-Allow-Origin: *`). The key is the stream's `viewerKey` when it has one (see "Per-stream config"), otherwise the stream name. Viewers get only the stream's `visibleLanguages`, and graphic events only when `publicGraphics` is on. `mode=live` (default) sends each timeline event as it is stored, for visitors in the building; `mode=delayed` releases events at `startedAt` plus the stream's listener delay, for remote listeners. Events: `connected`, `caption` (LCYT payload: `text`, `composedText`, `translations`, `codes.section`, `sequence`, `timestamp` without `Z`; a translation re-sends its caption with the same `sequence`), `section` and `graphic`. On connect the current section, graphic and caption are sent once. The payload builders are in `server/lib/viewer-payload.js`, the session in `server/lib/viewer-sse.js`.
 
 ### `GET /api/archive`
 
@@ -640,6 +640,8 @@ Anonymous aggregate statistics, and the play events the widget sends. Both are p
 | `GET /api/v1/captions/source` | Status of the pigateway pull: `{ "captionSource": { "configured", "connected", "lastEventAt", "received", "rejected", "deduped", "reconnects", "lastError", "mapper": { "mapped", "rejected", "unknown" } } }`. |
 | `GET /api/v1/delay` | `{ "delaySeconds", "maxSeconds" }` |
 | `PUT /api/v1/delay` | `{ "delaySeconds": 20 }`, an integer from 0 to `DELAY_MAX_SECONDS`. Applies at once to audio and captions. Not persisted: a restart returns to `DELAY_SECONDS`. |
+| `GET /api/v1/streams/{name}/config` | The stream's config (see "Per-stream config"). Scope `stream:<name>:control`. |
+| `PUT /api/v1/streams/{name}/config` | Change some of it, e.g. `{ "visibleLanguages": ["fi", "sv"], "publicGraphics": false }`. Answers the full config. `400` names an invalid or unknown field; `409` when the `viewerKey` belongs to another stream. |
 | `POST /api/v1/stats/session` | `{ "event": "start" \| "end", "streamName" }`. Sent by `on-publish.sh` and `on-publish-done.sh`. |
 
 Responses: `401` for a missing or wrong token, `503` when `RELAY_API_TOKEN` is not set. The token is compared in
@@ -656,6 +658,22 @@ The admin token (`RELAY_API_TOKEN`) can issue narrower tokens, stored in SQLite 
 - `GET /api/v1/tokens` (admin) lists tokens without values; `DELETE /api/v1/tokens/{id}` (admin) revokes one (204, or 404 for an unknown id).
 - A token gets `401` when it is unknown, revoked or expired, and `403` when its scopes do not allow the route. The routes that exist today still accept only `RELAY_API_TOKEN`.
 - With `RELAY_API_TOKEN` unset and no stored token, the scoped checks answer `503`, as before.
+
+### Per-stream config
+
+`GET` and `PUT /api/v1/streams/{name}/config` need scope `stream:<name>:control` (the admin token passes; a `view` token gets `403`). The config is stored as JSON in the `streams` table. `PUT` changes only the fields it sends; unknown fields are refused with `400`.
+
+| Field | Default | Effect |
+|---|---|---|
+| `visibleLanguages` | `["fi"]` | 1 to 10 language tags (lower case, e.g. `fi`, `sv-ax`), no repeats. Viewers get translations only in these languages. `composedText` shows the first of them that is not the caption's own language. |
+| `radio` | `true` | `false`: the MediaMTX ready hook does not start the radio pull for this stream. `RADIO_ON_READY=off` still wins. |
+| `publicGraphics` | `true` | `false`: graphic events are not sent to viewers (on connect or live). |
+| `viewerKey` | `null` | 8 to 64 characters `a-z 0-9 _ -`, unique across streams. When set, viewers connect to `/api/v1/viewer/{viewerKey}` and the stream name no longer opens the viewer. Clearing it (`null`) restores the name. A cleared key that is also a valid stream name (up to 32 characters) opens a stream of that name, so keep keys longer than that. |
+| `videoHls`, `recordOnLive` | `false` | Stored for the video and recording phases. No effect yet. |
+
+Changes apply at once, to open viewers too.
+
+**Late translations.** A translation that arrives after its `startedAt` plus the stream's current delay is stored with `payload.late: true` and counted per stream in `relay_translations_late_total{stream="..."}` on `/metrics` (counted from process start, not persisted). It is counted for pigateway translations and for the push route alike.
 
 **Timeline events.** Every event is stored in SQLite (`events` table) per stream with a `sourceKey` for de-duplication per stream and type. Final pigateway transcripts are stored as `caption` events with `sourceKey` = `epoch:seq`, next to the caption buffer. Pigateway `translation` events become `translation` events (`sourceKey` = `<sourceKey>:<lang>`); `rundown` snapshots become a `section` event whenever the section title changes; unknown pigateway events are ignored and counted in `mapper.unknown`. The push route above takes the same shape from senders that do not go through pigateway.
 

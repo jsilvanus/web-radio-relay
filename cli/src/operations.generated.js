@@ -443,6 +443,36 @@ export const operations = [
     ]
   },
   {
+    "operationId": "getStreamConfig",
+    "method": "GET",
+    "path": "/api/v1/streams/{name}/config",
+    "summary": "Read the per-stream config",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "setStreamConfig",
+    "method": "PUT",
+    "path": "/api/v1/streams/{name}/config",
+    "summary": "Set part of the per-stream config",
+    "bearer": true,
+    "body": "application/json",
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
     "operationId": "streamViewerEvents",
     "method": "GET",
     "path": "/api/v1/viewer/{key}",

@@ -643,6 +643,12 @@ test('viewer: refuses a bad key and a bad mode with 400', async () => {
 });
 
 test('viewer live: a pushed caption reaches the viewer at once, and a translation re-sends it', async () => {
+  const set = await fetch(`${base}/api/v1/streams/viewerlive/config`, {
+    method: 'PUT',
+    headers: auth,
+    body: JSON.stringify({ visibleLanguages: ['fi', 'en'] }),
+  });
+  assert.equal(set.status, 200);
   const sse = await openSse(`${base}/api/v1/viewer/viewerlive?mode=live`);
   try {
     assert.equal(await waitUntil(() => sse.frames.some((f) => f.event === 'connected')), true);
@@ -706,6 +712,112 @@ test('viewer delayed: an event waits for the stream delay before it is sent', as
   } finally {
     sse.close();
   }
+});
+
+test('config routes: GET and PUT per stream; the env token passes; no token is 401', async () => {
+  const get = await fetch(`${base}/api/v1/streams/cfgone/config`, { headers: auth });
+  assert.equal(get.status, 200);
+  const defaults = await get.json();
+  assert.equal(defaults.stream, 'cfgone');
+  assert.deepEqual(defaults.config.visibleLanguages, ['fi']);
+  assert.equal(defaults.config.radio, true);
+  assert.equal(defaults.config.viewerKey, null);
+
+  const put = await fetch(`${base}/api/v1/streams/cfgone/config`, {
+    method: 'PUT',
+    headers: auth,
+    body: json({ visibleLanguages: ['sv', 'en'], radio: false }),
+  });
+  assert.equal(put.status, 200);
+  const { config } = await put.json();
+  assert.deepEqual(config.visibleLanguages, ['sv', 'en']);
+  assert.equal(config.radio, false);
+  assert.equal(config.publicGraphics, true, 'fields not sent keep their value');
+
+  assert.equal((await fetch(`${base}/api/v1/streams/cfgone/config`)).status, 401);
+  assert.equal((await fetch(`${base}/api/v1/streams/cfgone/config`, { method: 'PUT', body: json({}) })).status, 401);
+
+  // radio false: MediaMTX ready hook leaves the radio pull alone for this stream (P8)
+  const ready = await fetch(`${base}/internal/mediamtx/ready?path=live/cfgone`, {
+    method: 'POST',
+    headers: { 'x-hook-secret': HOOK_SECRET },
+  });
+  assert.deepEqual(await ready.json(), { action: 'ignored', stream: 'cfgone' });
+});
+
+test('config routes: a control token works on its own stream only; a view token is 403', async () => {
+  const control = await (await fetch(`${base}/api/v1/tokens`, {
+    method: 'POST', headers: auth, body: json({ scopes: ['stream:cfgtwo:control'] }),
+  })).json();
+  const view = await (await fetch(`${base}/api/v1/tokens`, {
+    method: 'POST', headers: auth, body: json({ scopes: ['stream:cfgtwo:view'] }),
+  })).json();
+
+  const ok = await fetch(`${base}/api/v1/streams/cfgtwo/config`, {
+    method: 'PUT', headers: withToken(control.token), body: json({ publicGraphics: false }),
+  });
+  assert.equal(ok.status, 200);
+  assert.equal((await ok.json()).config.publicGraphics, false);
+  assert.equal((await fetch(`${base}/api/v1/streams/cfgtwo/config`, { headers: withToken(control.token) })).status, 200);
+  assert.equal((await fetch(`${base}/api/v1/streams/cfgthree/config`, { headers: withToken(control.token) })).status, 403);
+
+  assert.equal((await fetch(`${base}/api/v1/streams/cfgtwo/config`, { headers: withToken(view.token) })).status, 403);
+  const viewPut = await fetch(`${base}/api/v1/streams/cfgtwo/config`, {
+    method: 'PUT', headers: withToken(view.token), body: json({ radio: false }),
+  });
+  assert.equal(viewPut.status, 403);
+});
+
+test('config routes: invalid bodies answer 400 and name the field', async () => {
+  const unknown = await fetch(`${base}/api/v1/streams/cfgone/config`, {
+    method: 'PUT', headers: auth, body: json({ visibleLanguage: ['fi'] }),
+  });
+  assert.equal(unknown.status, 400);
+  assert.match((await unknown.json()).error, /unknown config field: visibleLanguage/);
+
+  const empty = await fetch(`${base}/api/v1/streams/cfgone/config`, {
+    method: 'PUT', headers: auth, body: json({ visibleLanguages: [] }),
+  });
+  assert.equal(empty.status, 400);
+  assert.match((await empty.json()).error, /visibleLanguages/);
+});
+
+test('viewerKey: the key opens the stream, the stream name stops working, another stream cannot take the key', async () => {
+  const set = await fetch(`${base}/api/v1/streams/vkeyone/config`, {
+    method: 'PUT', headers: auth, body: json({ viewerKey: 'vkey-one-secret' }),
+  });
+  assert.equal(set.status, 200);
+
+  const sse = await openSse(`${base}/api/v1/viewer/vkey-one-secret?mode=live`);
+  try {
+    assert.equal(await waitUntil(() => sse.frames.some((f) => f.event === 'connected')), true);
+    assert.equal(sse.frames.find((f) => f.event === 'connected').data.stream, 'vkeyone');
+  } finally {
+    sse.close();
+  }
+
+  assert.equal((await fetch(`${base}/api/v1/viewer/vkeyone`)).status, 404, 'the name no longer opens it');
+
+  const taken = await fetch(`${base}/api/v1/streams/vkeytwo/config`, {
+    method: 'PUT', headers: auth, body: json({ viewerKey: 'vkey-one-secret' }),
+  });
+  assert.equal(taken.status, 409);
+});
+
+test('late translations: a translation that started long before it arrived is counted in /metrics; a future one is not', async () => {
+  const now = Date.now();
+  const push = await fetch(`${base}/api/v1/streams/latestream/events`, {
+    method: 'POST',
+    headers: auth,
+    body: json({ events: [
+      { type: 'translation', lang: 'en', startedAt: now - 60_000, sourceKey: 'late-1:en', payload: { text: 'Late', sourceKey: 'late-1' } },
+      { type: 'translation', lang: 'sv', startedAt: now + 60_000, sourceKey: 'early-1:sv', payload: { text: 'Tidig', sourceKey: 'early-1' } },
+    ] }),
+  });
+  assert.equal(push.status, 202);
+  const text = await (await fetch(`${base}/metrics`, { headers: { Authorization: 'Bearer metrics-token' } })).text();
+  assert.match(text, /# TYPE relay_translations_late_total counter/);
+  assert.match(text, /relay_translations_late_total\{stream="latestream"\} 1/);
 });
 
 test('viewer: a viewer that connects mid-service gets the current state', async () => {

@@ -15,7 +15,7 @@ const MAX_TITLE = 200;
 const MAX_SOURCE_KEY = 128;
 const MAX_LINES = 20;
 const MAX_LINE = 200;
-const LANG = /^[a-z]{2,3}(-[a-z0-9]{1,8})*$/;
+export const LANG = /^[a-z]{2,3}(-[a-z0-9]{1,8})*$/;
 const ASSET_ID = /^[a-f0-9]{64}\.(png|jpg|webp)$/;
 
 class Invalid extends Error {}

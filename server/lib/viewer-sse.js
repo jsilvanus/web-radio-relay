@@ -7,9 +7,15 @@
 // translations filled in (same sequence). On connect the current section, graphic and caption are sent once.
 // Heartbeat comment every 25 s. Everything is cleaned up when the response closes.
 //
+// Per-stream config (P8, stream-config.js), read at each send so a change applies at once:
+// - translations sent are only the stream's visibleLanguages; composedText shows the first
+//   visible language that is not the caption's own language;
+// - graphic events are not sent when publicGraphics is false.
+//
 // Clock and timers are injected so tests run without waiting.
 
 import { captionBySourceKey, dueEvents, latestOfType, translationsOf } from './event-store.js';
+import { getConfig } from './stream-config.js';
 import { toViewerCaption, toViewerGraphic, toViewerSection } from './viewer-payload.js';
 
 export const VIEWER_MODES = ['live', 'delayed'];
@@ -30,7 +36,7 @@ const sessions = new Set();
  * @param {import('node:http').ServerResponse} args.res
  * @param {import('node:sqlite').DatabaseSync} args.db
  * @param {{ subscribe: Function }} args.bus event bus (used in live mode)
- * @param {string} args.stream stream name (the viewer key)
+ * @param {string} args.stream stream name (already resolved from the viewer key)
  * @param {'live'|'delayed'} args.mode
  * @param {() => number} [args.delayMsOf] current listener delay of the stream, in ms (delayed mode)
  * @param {() => number} [args.nowMs]
@@ -75,16 +81,18 @@ export function openViewerSession({
     if (!closed) res.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
   }
 
-  /** The caption payload as it stands now: translations stored so far, section in effect at its time. */
+  /** The caption payload as it stands now: visible translations stored so far, section in effect at its time. */
   function captionData(row) {
-    const translations = row.sourceKey ? translationsOf(db, stream, row.sourceKey) : [];
+    const { visibleLanguages } = getConfig(db, stream);
+    const translations = (row.sourceKey ? translationsOf(db, stream, row.sourceKey) : [])
+      .filter((t) => visibleLanguages.includes(t.lang));
     const section = latestOfType(db, stream, 'section', row.startedAt);
     return toViewerCaption({
       caption: row,
       translations: translations.map((t) => ({ lang: t.lang, text: t.payload.text })),
       section: section ? section.payload.title : undefined,
       sequence: row.id,
-      firstLang: translations[0]?.lang,
+      firstLang: visibleLanguages.find((lang) => lang !== row.lang),
     });
   }
 
@@ -96,7 +104,9 @@ export function openViewerSession({
   function sendRow(row) {
     if (row.type === 'caption') sendCaption(row);
     else if (row.type === 'section') write('section', toViewerSection(row));
-    else if (row.type === 'graphic') write('graphic', toViewerGraphic(row));
+    else if (row.type === 'graphic') {
+      if (getConfig(db, stream).publicGraphics) write('graphic', toViewerGraphic(row));
+    }
   }
 
   /** The caption a translation belongs to (payload.sourceKey), else the latest caption due. */
@@ -105,9 +115,13 @@ export function openViewerSession({
     return (key && captionBySourceKey(db, stream, key)) || latestOfType(db, stream, 'caption', nowMs(), releaseDelay());
   }
 
+  /** A translation in a language the stream does not show is not a reason to re-send a caption. */
+  const isVisible = (translation) => getConfig(db, stream).visibleLanguages.includes(translation.lang);
+
   function onBus(rows) {
     for (const row of rows) {
       if (row.type === 'translation') {
+        if (!isVisible(row)) continue;
         const caption = captionFor(row);
         if (caption) sendCaption(caption);
       } else {
@@ -147,6 +161,7 @@ export function openViewerSession({
       if (e.type === 'caption') {
         captions.set(e.id, e);
       } else if (e.type === 'translation') {
+        if (!isVisible(e)) continue;
         const caption = captionFor(e);
         if (caption && sent.get(caption.id)?.type === 'caption') captions.set(caption.id, caption);
       } else if (e.type === 'section' || e.type === 'graphic') {
@@ -161,7 +176,7 @@ export function openViewerSession({
   if (mode === 'delayed') release({ silent: true });
   const at = releaseAt();
   const section = latestOfType(db, stream, 'section', at);
-  const graphic = latestOfType(db, stream, 'graphic', at);
+  const graphic = getConfig(db, stream).publicGraphics ? latestOfType(db, stream, 'graphic', at) : null;
   const caption = latestOfType(db, stream, 'caption', at);
   if (section) write('section', toViewerSection(section));
   if (graphic) write('graphic', toViewerGraphic(graphic));

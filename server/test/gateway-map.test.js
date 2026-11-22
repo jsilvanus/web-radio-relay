@@ -120,3 +120,32 @@ test('stats returns a copy, not the live counters', () => {
   s.mapped = 99;
   assert.equal(m.stats().mapped, 0);
 });
+
+test('pigateway translation fixture: every field lands where the timeline model expects it', () => {
+  const m = createGatewayMapper();
+  const fixture = {
+    sourceKey: 'auditor:41',
+    sourceSeq: 41,
+    lang: 'SV',
+    text: 'Gud morgon',
+    startMs: NOW - 3000,
+    endMs: NOW - 2000,
+    model: 'mt-test-1',
+    extraFromGateway: 'ignored',
+  };
+  const out = m.map({ event: 'translation', data: JSON.stringify(fixture) }, NOW);
+  assert.equal(out.length, 1);
+  const [ev] = out;
+  assert.equal(ev.type, 'translation');
+  assert.equal(ev.lang, 'sv', 'language is normalised as validateEvent does');
+  assert.equal(ev.startedAt, NOW - 3000);
+  assert.equal(ev.endedAt, NOW - 2000);
+  assert.equal(ev.sourceKey, 'auditor:41:sv', 'stored key is sourceKey + ":" + lang');
+  assert.deepEqual(ev.payload, { text: 'Gud morgon', sourceKey: 'auditor:41', model: 'mt-test-1' });
+});
+
+test('pigateway translation without a language is rejected, not stored under "undefined"', () => {
+  const m = createGatewayMapper();
+  assert.deepEqual(m.map({ event: 'translation', data: { sourceKey: 'a:1', text: 'Hi', startMs: NOW, endMs: NOW } }, NOW), []);
+  assert.equal(m.stats().rejected, 1);
+});
