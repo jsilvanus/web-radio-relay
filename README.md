@@ -500,6 +500,9 @@ Copy `.env.example` to `.env` and override only what you need.
 | `DEFAULT_STREAM` | `stream` | Stream used by the legacy routes without a name (`/api/status`, `/api/captions`) |
 | `HLS_SEGMENT_PREFIX` | `/hls/` | URL prefix of segment files named in the delayed playlist (nginx serves `/hls/`) |
 | `RADIO_ON_READY` | `on` | `off` keeps the MediaMTX ready hook from starting the radio pull (the input is still probed). Per-stream settings do not exist yet |
+| `VIDEO_SUB_LANGS` | `fi` | Comma-separated subtitle renditions in the master playlist: language tags, or `original` for the caption events themselves. Other languages use the translation events |
+| `VIDEO_BANDWIDTH` | `2500000` | `BANDWIDTH` of the video variant in the master playlist (bits per second) |
+| `VIDEO_RESOLUTION` | `1280x720` | `RESOLUTION` of the video variant in the master playlist |
 | `CAPTION_RETENTION_SECONDS` | `3600` | How long captions stay in memory |
 | `GATEWAY_EVENTS_URL` | *(unset)* | Base URL of pigateway (e.g. `https://host:port`). When set, the relay pulls `GET <url>/api/v1/events?types=transcript,rundown,translation,graphic` (SSE). Transcripts go to the caption buffer of the stream named by `GATEWAY_CAPTION_STREAM`; the other three become timeline events (see *Timeline events* below). Unset disables the pull. `POST /api/v1/captions` keeps working either way |
 | `GATEWAY_TOKEN` | *(unset)* | Bearer token sent to pigateway. Never shown in status output |
@@ -543,6 +546,10 @@ Every RTMP stream key is a stream: `rtmp://<host>:1935/live/<key>` (the key is 1
 | `GET /api/streams` | Every stream, with live state and delay |
 | `GET /api/streams/{name}/status` | Live state and delay of one stream |
 | `GET /api/streams/{name}/hls/delayed.m3u8` | Delayed audio playlist of one stream |
+| `GET /api/streams/{name}/hls/master.m3u8` | Master playlist: delayed video plus WebVTT subtitle renditions (`VIDEO_SUB_LANGS`) |
+| `GET /api/streams/{name}/hls/video/delayed.m3u8` | Delayed video playlist of one stream (needs the video HLS packager) |
+| `GET /api/streams/{name}/hls/subs/{lang}.m3u8` | Subtitle playlist of one language, same segments as the delayed video |
+| `GET /api/streams/{name}/hls/subs/{lang}/{seq}.vtt` | WebVTT captions of one video segment (`original` = captions, other tags = translations) |
 | `GET /api/streams/{name}/captions?lang=fi&from=` | Captions of one stream that are due now |
 | `POST /api/v1/streams/{name}/captions` | Push captions for one stream (Bearer) |
 | `GET`/`PUT /api/v1/streams/{name}/delay` | Read or set one stream's delay (Bearer) |
