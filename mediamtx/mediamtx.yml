@@ -36,6 +36,6 @@ pathDefaults:
 paths:
   # Only live/<name> paths are accepted; anything else is refused.
   "~^live/[a-z0-9_-]{1,32}(-cc)?$":
-    runOnReady: 'wget -q -O - --post-data= "http://api:3000/internal/mediamtx/ready?secret=$HOOK_SECRET&path=$MTX_PATH"'
+    runOnReady: 'wget -q -O - --post-data= --header "x-hook-secret: $HOOK_SECRET" "http://api:3000/internal/mediamtx/ready?path=$MTX_PATH"'
     runOnReadyRestart: no
-    runOnNotReady: 'wget -q -O - --post-data= "http://api:3000/internal/mediamtx/notready?secret=$HOOK_SECRET&path=$MTX_PATH"'
+    runOnNotReady: 'wget -q -O - --post-data= --header "x-hook-secret: $HOOK_SECRET" "http://api:3000/internal/mediamtx/notready?path=$MTX_PATH"'

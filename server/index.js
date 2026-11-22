@@ -25,11 +25,15 @@
  * Internal (not in openapi.json, not proxied by nginx):
  *   POST /internal/mediamtx/auth     MediaMTX authMethod http hook
  *   POST /internal/publish-auth      nginx-rtmp on_publish hook
+ *   POST /internal/mediamtx/ready    MediaMTX runOnReady (starts the radio pull, probes the input)
+ *   POST /internal/mediamtx/notready MediaMTX runOnNotReady (stops the radio pull)
  *
  * Environment variables:
  *   PORT                     Port to listen on                          (default: 3000)
  *   RELAY_API_TOKEN          Bearer token for /api/v1 (unset = control API answers 503 unless a stored token exists)
  *   HOOK_SECRET              Secret for the /internal hooks (?secret= or x-hook-secret); unset = hooks answer 503
+ *   RADIO_ON_READY           "off" keeps MediaMTX ready hooks from starting the radio pull (default: on)
+ *   RADIO_SOURCE_URL_TEMPLATE  Input URL of the radio pull and the probe, with {name} (default: unset = no radio)
  *   PUBLISH_AUTH             "on" makes /internal/publish-auth check tokens; anything else allows all (default: off)
  *   RELAY_INTERNAL_CIDRS     IPv4 CIDRs whose reads need no token (default: 172.16.0.0/12,10.0.0.0/8,127.0.0.0/8)
  *   RELAY_DB_PATH            SQLite database file (default: /var/lib/relay/relay.db)
@@ -67,6 +71,7 @@ import fs from 'fs';
 import path from 'path';
 import https from 'https';
 import { fileURLToPath } from 'url';
+import { spawn } from 'child_process';
 import { requireBearer, requireScope, tokensEqual } from './lib/auth.js';
 import { openStore } from './lib/store.js';
 import { createToken, findTokenByValue, listTokens, revokeToken, validateTokenRequest } from './lib/tokens.js';
@@ -78,6 +83,8 @@ import { buildDelayedPlaylist } from './lib/hls-delay.js';
 import { validateCaptionBody } from './lib/captions.js';
 import { isValidStreamName, StreamRegistry } from './lib/streams.js';
 import { StreamSupervisor } from './lib/stream-supervisor.js';
+import { createReadyHandler } from './lib/ready-hooks.js';
+import { createProbeService } from './lib/probe-service.js';
 import { GatewayCaptions } from './lib/gateway-captions.js';
 import { createGatewayMapper } from './lib/gateway-map.js';
 import { addEvents } from './lib/event-store.js';
@@ -150,11 +157,26 @@ const gatewayCaptions = new GatewayCaptions({
   mapper: createGatewayMapper(),
   storeEvents: (stream, events, nowMs) => addEvents(store.db, stream, events, nowMs),
 });
+/** Input URL of the radio pull and of the probe, with {name}. Deployment config only. */
+const RADIO_SOURCE_URL_TEMPLATE = process.env.RADIO_SOURCE_URL_TEMPLATE || '';
+/** "off" keeps the MediaMTX ready hook from starting the radio pull (the probe still runs). */
+const RADIO_ON_READY = (process.env.RADIO_ON_READY ?? 'on').trim().toLowerCase() !== 'off';
 const supervisor = new StreamSupervisor({
   hlsDir: HLS_DIR, archiveDir: ARCHIVE_DIR,
   logDir: process.env.LOG_DIR || '/var/log/tuberadio',
-  sourceTemplate: process.env.RADIO_SOURCE_URL_TEMPLATE || '', staleMs: STALE_MS,
+  sourceTemplate: RADIO_SOURCE_URL_TEMPLATE, staleMs: STALE_MS,
   onSession: (name, event, timestamp) => { if (event === 'start') recordSessionStart(name, timestamp); else recordSessionEnd(name, timestamp); }
+});
+/** Last ffprobe result per stream (in memory); empty when RADIO_SOURCE_URL_TEMPLATE is unset. */
+const probeService = createProbeService({
+  spawnProcess: spawn,
+  urlFor: (name) => RADIO_SOURCE_URL_TEMPLATE.replaceAll('{name}', name),
+  log: (msg) => console.log(`[probe] ${msg}`),
+});
+/** MediaMTX ready and notready hooks: start or stop the radio pull, probe the input. */
+const readyHooks = createReadyHandler({
+  supervisor, probe: probeService, radioOnReady: RADIO_ON_READY,
+  log: (msg) => console.log(`[ready-hooks] ${msg}`),
 });
 
 /** Email provider: 'sendgrid' | 'mailgun' | '' (disabled) */
@@ -566,11 +588,17 @@ app.post('/api/v1/streams/:name/stop', requireToken, streamFromRequest, async (r
   try { res.json({ stream: await supervisor.stop(req.stream) }); }
   catch (err) { res.status(err.statusCode || 503).json({ error: err.message || 'unable to stop stream' }); }
 });
+/** Lifecycle state of a stream plus its last input probe (null when unknown). */
+const streamView = (name) => ({ ...supervisor.state(name), probe: probeService.get(name) });
 app.get('/api/v1/streams/:name/lifecycle', requireToken, streamFromRequest, (_req, res) => {
-  res.json({ stream: supervisor.state(_req.stream) });
+  res.json({ stream: streamView(_req.stream) });
 });
 app.get('/api/v1/streams/lifecycle', requireToken, (_req, res) => {
-  res.json({ streams: supervisor.list() });
+  res.json({ streams: supervisor.list().map((s) => ({ ...s, probe: probeService.get(s.name) })) });
+});
+// Must stay after /api/v1/streams/lifecycle above: "lifecycle" is a valid stream name.
+app.get('/api/v1/streams/:name', requireToken, streamFromRequest, (req, res) => {
+  res.json({ stream: streamView(req.stream) });
 });
 
 // ---------------------------------------------------------------------------
@@ -810,6 +838,26 @@ app.post('/internal/publish-auth', express.urlencoded({ extended: false, limit: 
     { lookupToken: lookupStoredToken, internalSecret: HOOK_SECRET, internalCidrs: RELAY_INTERNAL_CIDRS, nowMs: Date.now() },
   );
   res.status(result.allow ? 200 : 403).end();
+});
+
+// MediaMTX runOnReady / runOnNotReady (query `path`, secret as ?secret= or x-hook-secret).
+// Answers 200 for any valid path: MediaMTX does not retry, and failures are logged by the handler.
+app.post('/internal/mediamtx/ready', async (req, res) => {
+  const status = hookSecretStatus(req);
+  if (status) {
+    res.status(status).json({ error: status === 503 ? 'HOOK_SECRET is not set' : 'Unauthorized' });
+    return;
+  }
+  res.json(await readyHooks.ready(req.query.path));
+});
+
+app.post('/internal/mediamtx/notready', async (req, res) => {
+  const status = hookSecretStatus(req);
+  if (status) {
+    res.status(status).json({ error: status === 503 ? 'HOOK_SECRET is not set' : 'Unauthorized' });
+    return;
+  }
+  res.json(await readyHooks.notready(req.query.path));
 });
 
 app.get('/api/archive', (_req, res) => {
