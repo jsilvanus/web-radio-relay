@@ -478,6 +478,12 @@ Copy `.env.example` to `.env` and override only what you need.
 | `GATEWAY_EVENTS_URL` | *(unset)* | Base URL of pigateway (e.g. `https://host:port`). When set, the relay pulls captions from `GET <url>/api/v1/events?types=transcript` (SSE) and adds them to the stream named by `GATEWAY_CAPTION_STREAM`. Unset disables the pull. `POST /api/v1/captions` keeps working either way |
 | `GATEWAY_TOKEN` | *(unset)* | Bearer token sent to pigateway. Never shown in status output |
 | `GATEWAY_CAPTION_STREAM` | `DEFAULT_STREAM` | Stream that receives the gateway's captions |
+| `S3_ENDPOINT` | *(unset)* | S3 API base URL (path-style: `<endpoint>/<bucket>/<key>`). With `S3_BUCKET` unset, S3 is off. Used by the recording client (`server/lib/s3.js`) |
+| `S3_BUCKET` | *(unset)* | Bucket name. Required with `S3_ENDPOINT` |
+| `S3_REGION` | `us-east-1` | Region used in SigV4 signing |
+| `S3_ACCESS_KEY_ID` | *(unset)* | Access key id for SigV4 signing |
+| `S3_SECRET_ACCESS_KEY` | *(unset)* | Secret key for SigV4 signing. Never logged or returned; never commit |
+| `S3_PREFIX` | `relay/` | Prefix added to every object key in the bucket |
 
 ### FFmpeg / on-publish.sh
 
