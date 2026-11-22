@@ -372,6 +372,29 @@
           },
           "live": {
             "type": "boolean"
+          },
+          "probe": {
+            "description": "Last ffprobe result of the stream's input, in memory: set when the source becomes ready, cleared when it drops. Null when unknown.",
+            "type": ["object", "null"],
+            "properties": {
+              "video": {
+                "type": ["object", "null"],
+                "properties": {
+                  "codec": { "type": ["string", "null"] },
+                  "width": { "type": ["integer", "null"] },
+                  "height": { "type": ["integer", "null"] },
+                  "fps": { "type": ["number", "null"], "description": "Average frame rate, 3 decimals; null when unknown" }
+                }
+              },
+              "audio": {
+                "type": ["object", "null"],
+                "properties": {
+                  "codec": { "type": ["string", "null"] },
+                  "sampleRate": { "type": ["integer", "null"] },
+                  "channels": { "type": ["integer", "null"] }
+                }
+              }
+            }
           }
         }
       }
@@ -1377,6 +1400,51 @@
         "responses": {
           "200": {
             "description": "Stopped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "stream": {
+                      "$ref": "#/components/schemas/StreamLifecycle"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name"
+          },
+          "401": {
+            "description": "Missing or wrong token"
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}": {
+      "get": {
+        "operationId": "getManagedStream",
+        "summary": "Get a stream's lifecycle state and last input probe",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lifecycle state and probe (probe is null until the source has been probed)",
             "content": {
               "application/json": {
                 "schema": {

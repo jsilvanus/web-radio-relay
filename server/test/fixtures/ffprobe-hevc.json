@@ -1,0 +1,55 @@
+{
+    "streams": [
+        {
+            "index": 0,
+            "codec_name": "hevc",
+            "codec_long_name": "H.265 / HEVC (High Efficiency Video Coding)",
+            "profile": "Main",
+            "codec_type": "video",
+            "codec_tag_string": "hvc1",
+            "width": 1920,
+            "height": 1080,
+            "coded_width": 1920,
+            "coded_height": 1088,
+            "pix_fmt": "yuv420p",
+            "level": 120,
+            "r_frame_rate": "30000/1001",
+            "avg_frame_rate": "30000/1001",
+            "time_base": "1/1000",
+            "disposition": {
+                "default": 1,
+                "attached_pic": 0
+            }
+        },
+        {
+            "index": 1,
+            "codec_name": "mjpeg",
+            "codec_long_name": "Motion JPEG",
+            "codec_type": "video",
+            "width": 320,
+            "height": 180,
+            "r_frame_rate": "90000/1",
+            "avg_frame_rate": "0/0",
+            "disposition": {
+                "default": 0,
+                "attached_pic": 1
+            }
+        },
+        {
+            "index": 2,
+            "codec_name": "opus",
+            "codec_long_name": "Opus (Opus Interactive Audio Codec)",
+            "codec_type": "audio",
+            "sample_fmt": "flt",
+            "sample_rate": "48000",
+            "channels": 2,
+            "channel_layout": "stereo",
+            "r_frame_rate": "0/0",
+            "avg_frame_rate": "0/0",
+            "disposition": {
+                "default": 1,
+                "attached_pic": 0
+            }
+        }
+    ]
+}

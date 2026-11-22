@@ -451,7 +451,7 @@ Legacy RTMP publisher callbacks remain supported separately. Do not publish and 
 RTMP ingest runs in [MediaMTX](https://github.com/bluenviron/mediamtx) (`bluenviron/mediamtx:1.15.1-ffmpeg`, service `mediamtx`, config `mediamtx/mediamtx.yml`). It accepts `live/<name>` publishers (`<name>` is 1 to 32 characters of a-z, 0-9, `_`, `-`, with an optional `-cc` suffix for the captioned copy), asks the API whether each publish may start, and tells the API when a stream becomes ready or drops, so the API can start or stop the radio pull.
 
 - **Publish auth:** MediaMTX calls `POST /internal/mediamtx/auth` for every publish and read, with the `secret` query parameter set to `HOOK_SECRET`. The API route is added in a later step (P3.2); until it exists the API answers 404 and MediaMTX refuses every publish, so do not deploy this compose change on its own.
-- **Ready hooks:** `runOnReady` and `runOnNotReady` call `/internal/mediamtx/ready` and `/internal/mediamtx/notready` with `secret` and `path` (routes added in P3.3; until then the hook calls get 404 and are harmless). They run through `wget` inside the MediaMTX container, which is why the `-ffmpeg` image is used (the plain image has no shell).
+- **Ready hooks:** `runOnReady` and `runOnNotReady` call `/internal/mediamtx/ready` and `/internal/mediamtx/notready` with the `path` query and the secret in an `x-hook-secret` header (from `HOOK_SECRET` in the MediaMTX container's environment). A ready for `live/<name>` starts the radio pull from `RADIO_SOURCE_URL_TEMPLATE` (unless `RADIO_ON_READY=off`) and probes the input; a notready stops the pull and forgets the probe. `GET /api/v1/streams/{name}` shows the probe. They run through `wget` inside the MediaMTX container, which is why the `-ffmpeg` image is used (the plain image has no shell).
 - **Ports:**
 
 | Port | Where | Purpose |
@@ -498,6 +498,7 @@ Copy `.env.example` to `.env` and override only what you need.
 | `DELAY_MAX_SECONDS` | `60` | Upper bound for the delay (see `HLS_LIST_SIZE` above) |
 | `DEFAULT_STREAM` | `stream` | Stream used by the legacy routes without a name (`/api/status`, `/api/captions`) |
 | `HLS_SEGMENT_PREFIX` | `/hls/` | URL prefix of segment files named in the delayed playlist (nginx serves `/hls/`) |
+| `RADIO_ON_READY` | `on` | `off` keeps the MediaMTX ready hook from starting the radio pull (the input is still probed). Per-stream settings do not exist yet |
 | `CAPTION_RETENTION_SECONDS` | `3600` | How long captions stay in memory |
 | `GATEWAY_EVENTS_URL` | *(unset)* | Base URL of pigateway (e.g. `https://host:port`). When set, the relay pulls `GET <url>/api/v1/events?types=transcript,rundown,translation,graphic` (SSE). Transcripts go to the caption buffer of the stream named by `GATEWAY_CAPTION_STREAM`; the other three become timeline events (see *Timeline events* below). Unset disables the pull. `POST /api/v1/captions` keeps working either way |
 | `GATEWAY_TOKEN` | *(unset)* | Bearer token sent to pigateway. Never shown in status output |
@@ -653,6 +654,7 @@ Used by MediaMTX and nginx-rtmp, not by clients. They are not in `openapi.json`,
 
 - `POST /internal/mediamtx/auth` (MediaMTX `authMethod: http`): `200` to allow, `401` to deny. Publish needs a token with `stream:<name>:publish` (query `token=` or the password). A `live/<name>-cc` path (the captioner) needs `secret=<HOOK_SECRET>`. Reads from an address in `RELAY_INTERNAL_CIDRS` are allowed; other reads need a token with `stream:<name>:view`. The `api` and `metrics` actions are denied.
 - `POST /internal/publish-auth` (nginx-rtmp `on_publish`, form body): `200` to allow, `403` when the token is missing or lacks the scope. With `PUBLISH_AUTH` off (default) it always answers `200`. nginx cannot read env, so `nginx/nginx.conf` carries a `__HOOK_SECRET__` placeholder that must be replaced with `HOOK_SECRET` before nginx starts.
+- `POST /internal/mediamtx/ready` and `POST /internal/mediamtx/notready` (MediaMTX `runOnReady` / `runOnNotReady`, query `path=live/<name>`): `200` with `{ action }`, also for paths that are ignored (`action: "ignored"`, e.g. other paths and the `-cc` captioner). Ready starts the radio pull (`action: "start"`) unless `RADIO_ON_READY=off`, and probes the input in the background; notready stops it (`"stop"`) and clears the probe. A failed start or stop is logged without secrets and still answered `200` (`"error"`), because MediaMTX does not retry.
 
 ### Listener page (`/listen`)
 

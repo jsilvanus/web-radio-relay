@@ -308,6 +308,21 @@ export const operations = [
     ]
   },
   {
+    "operationId": "getManagedStream",
+    "method": "GET",
+    "path": "/api/v1/streams/{name}",
+    "summary": "Get a stream's lifecycle state and last input probe",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
     "operationId": "getManagedStreamLifecycle",
     "method": "GET",
     "path": "/api/v1/streams/{name}/lifecycle",

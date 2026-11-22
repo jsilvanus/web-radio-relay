@@ -69,6 +69,7 @@ before(async () => {
       METRICS_BEARER_TOKEN: 'metrics-token',
       HOOK_SECRET: HOOK_SECRET,
       PUBLISH_AUTH: 'off',
+      RADIO_SOURCE_URL_TEMPLATE: '',
       DELAY_SECONDS: '8',
       DELAY_MAX_SECONDS: '30',
       RELAY_DB_PATH: dbPath,
@@ -532,7 +533,53 @@ test('internal hooks answer 503 when HOOK_SECRET is unset', async () => {
       body: form({ name: 'keskus', args: 'token=x' }),
     });
     assert.equal(pub.status, 503);
+    const ready = await fetch(`${extra.url}/internal/mediamtx/ready?path=live/keskus`, {
+      method: 'POST',
+      headers: { 'x-hook-secret': 'anything' },
+    });
+    assert.equal(ready.status, 503);
   } finally {
     extra.proc.kill();
   }
+});
+
+const hook = (route, query, headers = {}) =>
+  fetch(`${base}/internal/mediamtx/${route}?${query}`, { method: 'POST', headers });
+
+test('ready/notready: missing or wrong secret is 401 (header and query)', async () => {
+  assert.equal((await hook('ready', 'path=live/keskus')).status, 401);
+  assert.equal((await hook('ready', 'path=live/keskus', { 'x-hook-secret': 'wrong' })).status, 401);
+  assert.equal((await hook('notready', 'path=live/keskus&secret=wrong')).status, 401);
+});
+
+test('ready/notready: valid secret; live paths answer 200, other and -cc paths are ignored', async () => {
+  const headers = { 'x-hook-secret': HOOK_SECRET };
+  // RADIO_SOURCE_URL_TEMPLATE is empty in this server, so the start fails and is answered, not raised.
+  const ready = await hook('ready', 'path=live/keskus', headers);
+  assert.equal(ready.status, 200);
+  assert.deepEqual(await ready.json(), { action: 'error', stream: 'keskus' });
+  const viaQuery = await hook('ready', `path=live/keskus&secret=${HOOK_SECRET}`);
+  assert.equal(viaQuery.status, 200);
+  assert.deepEqual(await viaQuery.json(), { action: 'error', stream: 'keskus' });
+  assert.deepEqual(await (await hook('ready', 'path=other/keskus', headers)).json(), { action: 'ignored' });
+  assert.deepEqual(await (await hook('ready', 'path=live/keskus-cc', headers)).json(), { action: 'ignored' });
+  assert.deepEqual(await (await hook('ready', '', headers)).json(), { action: 'ignored' });
+  const notready = await hook('notready', 'path=live/keskus', headers);
+  assert.equal(notready.status, 200);
+  assert.deepEqual(await notready.json(), { action: 'stop', stream: 'keskus' });
+  assert.deepEqual(await (await hook('notready', 'path=live/keskus-cc', headers)).json(), { action: 'ignored' });
+});
+
+test('GET /api/v1/streams/:name needs the token and has probe null until the source is probed', async () => {
+  const bearer = { Authorization: `Bearer ${TOKEN}` };
+  assert.equal((await fetch(`${base}/api/v1/streams/keskus`)).status, 401);
+  const res = await fetch(`${base}/api/v1/streams/keskus`, { headers: bearer });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.stream.name, 'keskus');
+  assert.equal(body.stream.probe, null);
+  assert.equal((await fetch(`${base}/api/v1/streams/Bad!`, { headers: bearer })).status, 400);
+  // "lifecycle" is a valid stream name: the list route must still win over the name route.
+  const list = await (await fetch(`${base}/api/v1/streams/lifecycle`, { headers: bearer })).json();
+  assert.ok(Array.isArray(list.streams));
 });
