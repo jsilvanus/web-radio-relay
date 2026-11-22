@@ -23,6 +23,7 @@ Tags: `latest`, `sha-<full sha>`, and the version for `v*` tags. Pin `IMAGE_TAG`
 4. Deploy workflow: `.github/workflows/deploy.yml` (runs after the image build on main, or by hand with an image tag; gated by the `production-riihimaki` environment). It needs these in the `production-riihimaki` environment:
    - Secrets: `SSH_PRIVATE_KEY`, `VM_HOST`, `VM_USER` (`appdeploy`), `RELAY_API_TOKEN`, `METRICS_BEARER_TOKEN`, `HOOK_SECRET`, and `GHCR_TOKEN` only if the packages are private.
    - Variables: `DEPLOY_PATH` (`/opt/apps/web-radio-relay`, created and owned by `appdeploy`), `DOMAIN`; optional `VM_SSH_PORT`, `RTMP_BIND` (default now `127.0.0.1`, was `0.0.0.0`; set `0.0.0.0` for direct publishers), `RTMP_PORT`, `DELAY_SECONDS`, `DELAY_MAX_SECONDS`.
+   - Public ingest (optional, see the root README "Publishing from a phone"): `RTMPS_ENABLED`, `SRT_ENABLED` (`on` to turn on), `RTMPS_BIND`, `RTMPS_PORT` (default `127.0.0.1:1937`), `SRT_BIND`, `SRT_PORT` (default `127.0.0.1:8890/udp`). RTMPS needs `rtmps.crt` and `rtmps.key` in `${DEPLOY_PATH}/certs` (placed by hand; the workflow does not copy certificates).
 5. `/metrics` is internal only: nginx proxies just `/api/` and `/listen`, so it is not reachable through Traefik.
 
 ## Church VPS notes (checked read-only 2026-10-25)

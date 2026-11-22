@@ -61,12 +61,21 @@ services:
       # While nginx-rtmp still holds RTMP_PORT, MediaMTX listens on its own port
       # (loopback by default). At the switch, move RTMP_PORT here and drop nginx's.
       - "${MEDIAMTX_RTMP_BIND:-127.0.0.1}:${MEDIAMTX_RTMP_PORT:-1936}:1935"
+      # RTMPS and SRT: off unless the deploy variables RTMPS_ENABLED / SRT_ENABLED are on,
+      # which the deploy workflow turns into MTX_RTMPENCRYPTION=optional / MTX_SRT=yes in .env.
+      # The ports are bound to loopback by default; open them in the host firewall only when used.
+      - "${RTMPS_BIND:-127.0.0.1}:${RTMPS_PORT:-1937}:1937"   # RTMPS (TLS)
+      - "${SRT_BIND:-127.0.0.1}:${SRT_PORT:-8890}:8890/udp"   # SRT (UDP)
     environment:
       HOOK_SECRET: "${HOOK_SECRET}"
       # Overrides authHTTPAddress in mediamtx.yml so the secret comes from the env.
       MTX_AUTHHTTPADDRESS: "http://api:3000/internal/mediamtx/auth?secret=${HOOK_SECRET}"
+      MTX_RTMPENCRYPTION: "${MTX_RTMPENCRYPTION:-no}"
+      MTX_SRT: "${MTX_SRT:-no}"
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
+      # RTMPS certificate and key, read as /certs/rtmps.crt and /certs/rtmps.key (see the README section "Publishing from a phone").
+      - "${RTMPS_CERT_DIR:-./certs}:/certs:ro"
     depends_on:
       api:
         condition: service_healthy

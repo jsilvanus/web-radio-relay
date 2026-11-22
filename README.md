@@ -15,11 +15,12 @@ Web radio relay: audio, captions and translations for browsers, with a listener 
 3. [Setup — Docker (recommended)](#setup--docker-recommended)
 4. [Setup — Bare metal / development server](#setup--bare-metal--development-server)
 5. [Running the Vite dev site](#running-the-vite-dev-site)
-6. [Environment variables](#environment-variables)
-7. [API reference](#api-reference)
-8. [Embeddable widget](#embeddable-widget)
-9. [Integration with a YouTube fan-out project](#integration-with-a-youtube-fan-out-project)
-10. [Troubleshooting](#troubleshooting)
+6. [Publishing from a phone](#publishing-from-a-phone)
+7. [Environment variables](#environment-variables)
+8. [API reference](#api-reference)
+9. [Embeddable widget](#embeddable-widget)
+10. [Integration with a YouTube fan-out project](#integration-with-a-youtube-fan-out-project)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -457,14 +458,49 @@ RTMP ingest runs in [MediaMTX](https://github.com/bluenviron/mediamtx) (`bluenvi
 | Port | Where | Purpose |
 |---|---|---|
 | 1935 (RTMP) | host, `${RTMP_BIND:-127.0.0.1}:${RTMP_PORT:-1935}` | publishers push here |
+| 1937 (RTMPS) | host, `${RTMPS_BIND:-127.0.0.1}:${RTMPS_PORT:-1937}` | TLS ingest for phones; listens only with `MTX_RTMPENCRYPTION=optional` |
+| 8890 (SRT, UDP) | host, `${SRT_BIND:-127.0.0.1}:${SRT_PORT:-8890}/udp` | SRT ingest; listens only with `MTX_SRT=yes` |
 | 8554 (RTSP) | internal network only | the API pulls `live/<name>` for the radio (`RADIO_SOURCE_URL_TEMPLATE`) |
 | 9997 (API) | internal network only, not published | MediaMTX control API |
 
-HLS, WebRTC, SRT and metrics are off in MediaMTX. The relay still serves HLS itself.
+HLS, WebRTC and metrics are off in MediaMTX. The relay still serves HLS itself. RTMPS and SRT are optional (see [Publishing from a phone](#publishing-from-a-phone)).
 
 - **Secrets:** `HOOK_SECRET` (generate with `openssl rand -hex 32`) is required for the auth and ready hooks; set it in `.env` for both the `api` and `mediamtx` services. The compose file also sets `MTX_AUTHHTTPADDRESS` so the secret reaches MediaMTX from the environment, not from the YAML.
 - **Production switch (plan S1):** in `deploy/docker-compose.yml` the `mediamtx` service is in the compose profile `mediamtx` and stays off until the deploy workflow's `MEDIAMTX` variable is `on` (it then writes `COMPOSE_PROFILES=mediamtx` and `HOOK_SECRET` to `.env`). While nginx-rtmp keeps `RTMP_PORT`, MediaMTX listens on `MEDIAMTX_RTMP_BIND:MEDIAMTX_RTMP_PORT` (default `127.0.0.1:1936`), so both can run side by side for a test publish. To switch: point the publisher at MediaMTX with a `stream:<name>:publish` token, set `RADIO_SOURCE_URL_TEMPLATE=rtsp://mediamtx:8554/live/{name}`, then move the host RTMP port from nginx to MediaMTX. Rollback is the reverse. The local `docker-compose.yml` already runs MediaMTX on the RTMP port.
 - **Status:** not yet verified against a live publisher or the real MediaMTX container (no Docker daemon in the build environment); only the config's YAML syntax and the compose files were checked.
+
+## Publishing from a phone
+
+Phones and guest encoders publish with a short-lived token for one stream. The admin token never goes on a phone. Nothing here is verified against a real phone app or a live MediaMTX yet; the steps follow the auth hook in `server/lib/mediamtx-auth.js`.
+
+**1. Issue a token** (admin token, on the server or from the CLI; `/api/` is proxied to the API):
+
+```bash
+curl -sS -X POST https://example.com/api/v1/tokens \
+  -H "Authorization: Bearer $RELAY_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{ "scopes": ["stream:example:publish", "stream:example:data"], "expiresInSeconds": 43200, "label": "phone" }'
+```
+
+The answer (`201`) has `token`, shown once. 43200 seconds is 12 hours. Revoke early with `DELETE /api/v1/tokens/{id}`.
+
+**2. Give the phone the address.** Replace `example` with the stream name (`a-z 0-9 _ -`, up to 32 characters):
+
+- RTMPS: `rtmps://example.com:1937/live/example?token=<token>`. Some apps ask for a server URL and a stream key separately; then the server is `rtmps://example.com:1937/live` and the key is `example?token=<token>` (the app's behaviour is not verified).
+- SRT (UDP): `srt://example.com:8890`, with the stream ID `publish:live/example:phone:<token>`. The hook reads the token from the password field, which is the last part of the stream ID. The user part (`phone`) is ignored. The stream-ID form follows the MediaMTX SRT documentation and is not verified here.
+
+The token must carry `stream:<name>:publish` for the path being published. Reads of the stream from the internal network need no token.
+
+**3. Open the ports on the host.** The compose file binds RTMPS and SRT to `127.0.0.1` by default, so nothing is reachable from outside. To accept phones, the operator sets `RTMPS_BIND` / `SRT_BIND` to `0.0.0.0` (or the public address) in the deploy variables, and opens the host firewall (TCP 1937 for RTMPS, UDP 8890 for SRT) only as far as needed. The firewall is set on the VPS by the operator, not by this repository.
+
+**4. Turn the listeners on.** In the deploy variables set `RTMPS_ENABLED=on` and/or `SRT_ENABLED=on`. The workflow writes `MTX_RTMPENCRYPTION=optional` and `MTX_SRT=yes` into `.env`. Both need `COMPOSE_PROFILES=mediamtx` (the `mediamtx` service). Locally, set those two variables in `.env` yourself.
+
+**RTMPS certificate.** MediaMTX reads `/certs/rtmps.crt` and `/certs/rtmps.key` from a read-only mount (`${RTMPS_CERT_DIR:-./certs}` next to the deploy compose file). Nothing copies them from this repository. Options, none tested here:
+
+- Export the certificate that Traefik already holds for `DOMAIN` from its ACME store (`acme.json`), with a tool such as `traefik-certs-dumper`, and write the certificate chain and key as `rtmps.crt` and `rtmps.key`.
+- Or let `certbot` issue a certificate with the DNS challenge (Traefik owns ports 80 and 443, so the HTTP challenge will not work) and copy it into the directory.
+
+Make the key readable by the container's user. MediaMTX reads the certificate only at start, so restart the `mediamtx` container after each renewal. If the files are missing while `MTX_RTMPENCRYPTION=optional`, MediaMTX will not start.
 
 ## Environment variables
 
@@ -478,6 +514,12 @@ Copy `.env.example` to `.env` and override only what you need.
 | `RTMP_PORT` | `1935` | Host port mapped to the MediaMTX RTMP ingest (container port 1935) |
 | `RTMP_BIND` | `127.0.0.1` | Host address the RTMP port is bound to (`0.0.0.0` for direct publishers) |
 | `HTTP_PORT` | `8080` | Host port mapped to the HTTP server (container port 8080) |
+| `RTMPS_PORT` | `1937` | Host port mapped to the MediaMTX RTMPS ingest (container port 1937) |
+| `RTMPS_BIND` | `127.0.0.1` | Host address for the RTMPS port (`0.0.0.0` only when the firewall allows it) |
+| `SRT_PORT` | `8890` | Host UDP port mapped to the MediaMTX SRT ingest (container port 8890) |
+| `SRT_BIND` | `127.0.0.1` | Host address for the SRT port |
+| `MTX_RTMPENCRYPTION` | `no` | MediaMTX env override: `optional` turns RTMPS on beside RTMP. Needs `/certs/rtmps.crt` and `/certs/rtmps.key` in the container |
+| `MTX_SRT` | `no` | MediaMTX env override: `yes` turns SRT on |
 
 ### API server (`server/index.js`)
 
