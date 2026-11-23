@@ -61,7 +61,7 @@ Other options: `--interval` and `--show` (seconds between captions and on screen
 
 | Date | fps | Pairs per frame | Captions shown | ä ö å Ä Ö Å correct | Timing vs burned clock | Drift after 5 min | Notes |
 |---|---|---|---|---|---|---|---|
-| | 25 | auto (1,1,1,1,2) | | | | | |
+| 2026-11-23 | 25 | auto (1,1,1,1,2) | yes, from nro 4 (1-3 not shown) | yes | matches burned clock | not checked | Private broadcast, copy mode from the Pi. Recording starts about 10 s in with nro 4; captions 1-3 likely fell before YouTube's recording/caption start. YouTube marks the video as having captions (contentDetails.caption true); track list needs the youtube.force-ssl scope. Ingest reported noData once around 2 min. |
 | | 25 | 1 | | | | | |
 | | 30 | auto (1) | | | | | |
 
