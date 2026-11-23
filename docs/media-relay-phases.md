@@ -242,7 +242,7 @@ Sync points: **S1** after P3 (one real publish through MediaMTX on a test host w
 
 ## Experiments (humans, not agents)
 
-- **E1** 608 on YouTube at 25 and 30 fps (plan 15). Gate for P9.
+- **E1** 608 on YouTube at 25 and 30 fps (plan 15). Gate for P9. How to run it: [`e1-youtube-608.md`](e1-youtube-608.md).
 - **E2** Facebook RTMPS copy push.
 - **E3** Clapper test for `CAPTION_SYNC_OFFSET_MS`.
 - **E4** Church upstream bandwidth through the tunnel with video.
@@ -285,5 +285,5 @@ All tasks were built on one branch (PR #13) instead of one PR each. Nothing has 
 | P7.5 viewer SSE | H+ | P7.1 | done (PR #13) |
 | P7b viewer pages | H+ | P7.5, P6.3 | done (PR #13) |
 | P8 translations | H | P7.2, P7.5 | done (PR #13) |
-| P9.1 to P9.6 captioner | S/H+ | E1, P3.3, P7.1 | P9.3 FLV and P9.4 hold buffer done; P9.1, P9.2, P9.5, P9.6 wait for E1 |
+| P9.1 to P9.6 captioner | S/H+ | E1, P3.3, P7.1 | P9.1 608 encoder, P9.2 cc_data/SEI, P9.3 FLV and P9.4 hold buffer done; E1 test file maker built (`docs/e1-youtube-608.md`), E1 itself not run; P9.5, P9.6 wait for E1 |
 | P10 public ingest | H | P3.2 | done (PR #13) |
