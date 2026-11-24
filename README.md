@@ -469,6 +469,29 @@ HLS, WebRTC and metrics are off in MediaMTX. The relay still serves HLS itself. 
 - **Production switch (plan S1):** in `deploy/docker-compose.yml` the `mediamtx` service is in the compose profile `mediamtx` and stays off until the deploy workflow's `MEDIAMTX` variable is `on` (it then writes `COMPOSE_PROFILES=mediamtx` and `HOOK_SECRET` to `.env`). While nginx-rtmp keeps `RTMP_PORT`, MediaMTX listens on `MEDIAMTX_RTMP_BIND:MEDIAMTX_RTMP_PORT` (default `127.0.0.1:1936`), so both can run side by side for a test publish. To switch: point the publisher at MediaMTX with a `stream:<name>:publish` token, set `RADIO_SOURCE_URL_TEMPLATE=rtsp://mediamtx:8554/live/{name}`, then move the host RTMP port from nginx to MediaMTX. Rollback is the reverse. The local `docker-compose.yml` already runs MediaMTX on the RTMP port.
 - **Status:** not yet verified against a live publisher or the real MediaMTX container (no Docker daemon in the build environment); only the config's YAML syntax and the compose files were checked.
 
+## CEA-608 captioned stream
+
+The optional captioner creates a second MediaMTX path, `live/<name>-cc`, from the raw `live/<name>` input. It does not re-encode: FFmpeg copies the input to FLV, the relay holds tags for the configured interval and inserts ATSC A/53 CEA-608 SEI into H.264 access units, and a second FFmpeg publishes the edited FLV back to MediaMTX. The raw path is unchanged.
+
+The captioner is off by default. Configure it with a token that has `stream:<name>:control` (or the admin token):
+
+```http
+GET /api/v1/streams/church/captioner
+PUT /api/v1/streams/church/captioner
+Content-Type: application/json
+
+{
+  "enabled": true,
+  "lang": "fi",
+  "holdSeconds": 16,
+  "syncOffsetMs": 1500
+}
+```
+
+The PUT body is a partial update. `holdSeconds` is 1-60 seconds; `syncOffsetMs` is -10000..10000 ms. The GET response includes runtime state, embedded caption count, late count and replaced-character count. Configuration persists in the stream's SQLite config. Enabling while a source is live starts the embedder; disabling stops it. A source ready/not-ready transition also starts/stops it.
+
+Requirements: FFmpeg on the API host, `HOOK_SECRET` set, and an H.264 input at 25, 30, 50 or 60 fps. The input is read from `MEDIAMTX_RTSP_BASE` (default `rtsp://mediamtx:8554`); the captioned path is published to `MEDIAMTX_RTMP_BASE` (default `rtmp://mediamtx:1935`) using the internal hook secret. `CAPTION_HOLD_SECONDS` and `CAPTION_SYNC_OFFSET_MS` set the defaults for newly configured streams. Only final caption events in the configured language are embedded. Destinations that should carry embedded captions must select variant `cc`; do not also send a separate HTTP caption track to the same broadcast.
+
 ## Publishing from a phone
 
 Phones and guest encoders publish with a short-lived token for one stream. The admin token never goes on a phone. Nothing here is verified against a real phone app or a live MediaMTX yet; the steps follow the auth hook in `server/lib/mediamtx-auth.js`.
