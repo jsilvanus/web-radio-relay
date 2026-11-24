@@ -177,3 +177,24 @@ test('with the real supervisor, two ready hooks start ffmpeg once', async () => 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('ready and notready start and stop the enabled captioner with the source', async () => {
+  const calls = [];
+  const captioner = {
+    async ready(stream, config) { calls.push(['ready', stream, config.enabled]); return { stream, state: 'running' }; },
+    notready(stream) { calls.push(['notready', stream]); return { stream, state: 'off' }; },
+  };
+  const handler = createReadyHandler({
+    supervisor: fakeSupervisor(),
+    probe: fakeProbe(),
+    captioner,
+    getConfig: () => ({ videoHls: false, recordOnLive: false, captioner: { enabled: true, lang: 'fi' } }),
+  });
+  const started = await handler.ready('live/church');
+  assert.equal(started.captioner, 'running');
+  assert.deepEqual(calls, [['ready', 'church', true]]);
+  const stopped = await handler.notready('live/church');
+  assert.equal(stopped.captioner, 'off');
+  assert.deepEqual(calls, [['ready', 'church', true], ['notready', 'church']]);
+});
