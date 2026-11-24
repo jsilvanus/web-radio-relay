@@ -299,9 +299,9 @@ export function createCaptionerService({
     active.set(stream, config);
     if (live.has(stream)) {
       if (config.enabled) {
-        const probeInfo = getProbe(stream);
+        let probeInfo = getProbe(stream);
         if ((!probeInfo?.video || !frameRate(probeInfo)) && typeof probe === 'function') {
-          try { await probe(stream); } catch { /* start() returns the useful status */ }
+          try { probeInfo = await probe(stream); } catch { /* start() returns the useful status */ }
         }
         return start(stream, config, probeInfo);
       }
