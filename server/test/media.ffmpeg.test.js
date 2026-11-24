@@ -22,6 +22,7 @@ import { vttForSegment, mpegtsForSegment } from '../lib/vtt-segments.js';
 import { createFlvParser, parseVideoTag, writeFlvHeader, writeTag, TAG_VIDEO, AVC_NALU } from '../lib/flv.js';
 import { createCaptioner } from '../lib/captioner.js';
 import { embedCaptionFrame } from '../lib/captioner-service.js';
+import { parseA53Sei } from '../lib/cc-data.js';
 
 const hasFfmpeg = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
 const hasFfprobe = spawnSync('ffprobe', ['-version'], { stdio: 'ignore' }).status === 0;
@@ -327,6 +328,15 @@ test('captioner: real ffmpeg FLV round trip exposes 608 text at the scheduled PT
       output.push(writeTag({ ...item, data }));
     }
     assert.equal(scheduler.stats().embedded, 1, 'the scheduler emitted one EOC');
+    const embeddedItems = createFlvParser().push(Buffer.concat(output));
+    const embeddedPairs = embeddedItems
+      .filter((item) => item.kind === 'tag' && item.type === TAG_VIDEO)
+      .flatMap((item) => parseVideoTag(item.data).nalus.map(parseA53Sei).filter(Boolean))
+      .flatMap((sei) => sei.pairs);
+    const decodedChars = embeddedPairs.flatMap((pair) => pair.map((byte) => byte & 0x7f))
+      .filter((byte) => byte >= 0x20 && byte <= 0x7e)
+      .map((byte) => String.fromCharCode(byte)).join('');
+    assert.match(decodedChars, /Hei\\s+maailma/i, 'the inserted A/53 triplets carry the expected characters');
     writeFileSync(embeddedFile, Buffer.concat(output));
 
     // Remux only: the AVC access units (including our SEI) remain bit-identical.
