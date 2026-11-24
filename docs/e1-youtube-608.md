@@ -89,6 +89,6 @@ Watch with CC on and check CC1 (Finnish text) and CC3 (`E1 CC3 nro N`). Record w
 | Date | fps | Tracks | Result |
 |---|---|---|---|
 | 2026-11-23 | 25 | 1 (CC1) | Captions shown from nro 4 with correct letters; nro 1-3 not shown; track labelled English - CC1 |
-| 2026-11-24 | 30 | 2 (CC1 + CC3) | yes, CC1 shown; first seen was nro 3 at 8 s on the player clock (player began about 11 s into the file, so nro 1 and 2 came before it); CC3 not shown: the player offered only CC1, so YouTube did not show a second track | yes, Finnish letters correct | player clock consistent with the file: nro 3 due at 18 s, seen about 7 s after the player began | not checked | Private broadcast with embedded captions, copy mode from the Pi, 16:50 to 17:01 Pi time. Ingest good, one info note: bitrate high (about 4.8 Mbps). |
+| 2026-11-24 | 30 | 2 (CC1 + CC3) | yes, CC1 shown; first seen was nro 3 at 8 s on the player clock (player began about 11 s into the file, so nro 1 and 2 came before it); CC3 not shown: the player offered only CC1. Possibly received but not displayed; unconfirmed, since the caption track list needs youtube.force-ssl | yes, Finnish letters correct | player clock consistent with the file: nro 3 due at 18 s, seen about 7 s after the player began | not checked | Private broadcast with embedded captions, copy mode from the Pi, 16:50 to 17:01 Pi time. Ingest good, one info note: bitrate high (about 4.8 Mbps). |
 | | 30 | 1 (CC1), lead-in 30 s | planned: `--lead-in 30`, to check whether nro 1 appears once the player starts |  |  |  |  |
 
