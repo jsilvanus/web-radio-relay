@@ -246,6 +246,12 @@ const captionerProbeService = createProbeService({
   log: (msg) => console.log(`[captioner-probe] ${msg}`),
 });
 
+// Clear both probe caches on not-ready; a reconnect may change the source codec or frame rate.
+const readyHookProbe = {
+  probe: (name) => probeService.probe(name),
+  clear: (name) => { probeService.clear(name); captionerProbeService.clear(name); },
+};
+
 /** Live CEA-608 embedder: raw RTSP -> FLV/Node SEI edit -> captioned RTMP variant. */
 const captionerService = createCaptionerService({
   spawnProcess: spawn,
@@ -311,7 +317,7 @@ const hlsPackager = new HlsPackager({
  * destinations, the video HLS packager and the recording. Each is independent (ready-hooks.js).
  */
 const readyHooks = createReadyHandler({
-  supervisor, probe: probeService,
+  supervisor, probe: readyHookProbe,
   // RADIO_ON_READY=off wins; otherwise the stream's own `radio` setting decides (P8).
   radioOnReady: (name) => RADIO_ON_READY && getConfig(db, name).radio,
   log: (msg) => console.log(`[ready-hooks] ${msg}`),
