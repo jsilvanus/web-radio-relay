@@ -14,8 +14,8 @@ import { a53SeiNal } from './cc-data.js';
 const DEFAULT_CONFIG = Object.freeze({ enabled: false, lang: 'fi', holdSeconds: 16, syncOffsetMs: 1500 });
 const SUPPORTED_FPS = new Set([25, 30, 50, 60]);
 
-function checkedConfig(value = {}) {
-  const config = { ...serviceDefaults, ...(value || {}) };
+function checkedConfig(value = {}, defaults = DEFAULT_CONFIG) {
+  const config = { ...defaults, ...(value || {}) };
   if (typeof config.enabled !== 'boolean') throw new TypeError('captioner.enabled must be boolean');
   if (typeof config.lang !== 'string' || !/^[a-z]{2,3}(-[a-z0-9]{1,8})*$/.test(config.lang)) {
     throw new TypeError('captioner.lang must be a language tag');
@@ -130,7 +130,7 @@ export function createCaptionerService({
   }
 
   function start(stream, configValue) {
-    const config = checkedConfig(configValue);
+    const config = checkedConfig(configValue, serviceDefaults);
     active.set(stream, config);
     if (!config.enabled) {
       stop(stream, 'disabled');
