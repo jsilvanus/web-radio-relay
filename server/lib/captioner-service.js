@@ -162,7 +162,14 @@ export function createCaptionerService({
     sessions.set(stream, session);
 
     const inputUrl = urlFor(rtspBase, `live/${stream}`);
-    const publishUrl = new URL(urlFor(rtmpBase, `live/${stream}-cc`));
+    let publishUrl;
+    try {
+      publishUrl = new URL(urlFor(rtmpBase, `live/${stream}-cc`));
+    } catch {
+      session.state = 'failed';
+      session.error = 'MEDIAMTX_RTMP_BASE is not a valid URL';
+      return state(stream);
+    }
     if (!secret) {
       session.state = 'failed';
       session.error = 'HOOK_SECRET is not configured';
