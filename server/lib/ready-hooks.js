@@ -40,6 +40,7 @@ export function parseHookPath(path) {
  *           state(stream: string): { state: string } | null }} [deps.recordings]
  *   recording service (recording-service.js), started when config.recordOnLive is on and S3 is configured
  * @param {boolean} [deps.s3Configured]
+ * @param {{ ready(stream: string, config: object): Promise<object>, notready(stream: string): object }} [deps.captioner]
  * @param {(stream: string) => { videoHls: boolean, recordOnLive: boolean }} [deps.getConfig]
  * @returns {{ ready(path: string): Promise<object>, notready(path: string): Promise<object> }}
  *   Without egress, hls or recordings the answer is the legacy `{ action, stream }`. With any of them it
@@ -57,8 +58,9 @@ export function createReadyHandler({
   recordings = null,
   s3Configured = false,
   getConfig = null,
+  captioner = null,
 }) {
-  const extended = Boolean(egress || hls || recordings);
+  const extended = Boolean(egress || hls || recordings || captioner);
   const describe = (err, secrets = []) => redact(String(err?.message || err), secrets);
 
   // Not awaited: a probe can take up to its timeout and MediaMTX waits for the answer.
@@ -130,6 +132,32 @@ export function createReadyHandler({
     } catch (err) {
       log(`ready ${stream}: video HLS start failed: ${describe(err)}`);
       failed.push('hls');
+      return 'error';
+    }
+  }
+
+
+  async function startCaptioner(stream, config, failed) {
+    if (!captioner) return 'ignored';
+    try {
+      const result = await captioner.ready(stream, config.captioner || { enabled: false });
+      if (result?.state === 'failed') failed.push('captioner');
+      return result?.state || 'unknown';
+    } catch (err) {
+      log('ready ' + stream + ': captioner start failed: ' + describe(err));
+      failed.push('captioner');
+      return 'error';
+    }
+  }
+
+  function stopCaptioner(stream, failed) {
+    if (!captioner) return 'ignored';
+    try {
+      const result = captioner.notready(stream);
+      return result?.state || 'stop';
+    } catch (err) {
+      log('notready ' + stream + ': captioner stop failed: ' + describe(err));
+      failed.push('captioner');
       return 'error';
     }
   }
@@ -210,10 +238,11 @@ export function createReadyHandler({
       const destinations = egress ? startDestinations(stream, failed) : 0;
       const hlsState = configOk ? startHls(stream, config, failed) : 'error';
       const recording = configOk ? startRecording(stream, config, failed) : 'error';
+      const captionerState = configOk ? await startCaptioner(stream, config, failed) : 'error';
 
-      const started = radio === 'start' || destinations > 0 || hlsState === 'start' || recording === 'start';
+      const started = radio === 'start' || destinations > 0 || hlsState === 'start' || recording === 'start' || captionerState === 'running';
       const action = failed.length ? 'error' : started ? 'start' : 'ignored';
-      return { action, stream, radio, destinations, hls: hlsState, recording, failed };
+      return { action, stream, radio, destinations, hls: hlsState, recording, captioner: captionerState, failed };
     },
 
     /**
@@ -226,6 +255,7 @@ export function createReadyHandler({
       const { stream } = hook;
       probe.clear(stream);
 
+      const captionerState = stopCaptioner(stream, []);
       const radio = await radioStop(stream);
       if (!extended) return radio === 'error' ? { action: 'error', stream } : { action: 'stop', stream };
 
@@ -246,7 +276,7 @@ export function createReadyHandler({
       const hlsState = stopHls(stream, failed);
       const recording = await stopRecording(stream, failed);
       const action = failed.length ? 'error' : 'stop';
-      return { action, stream, radio, destinations, hls: hlsState, recording, failed };
+      return { action, stream, radio, destinations, hls: hlsState, recording, captioner: captionerState, failed };
     },
   };
 }
