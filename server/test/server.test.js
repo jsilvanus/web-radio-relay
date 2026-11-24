@@ -770,6 +770,37 @@ test('config routes: GET and PUT per stream; the env token passes; no token is 4
   });
 });
 
+test('captioner routes: per-stream config persists and runtime status is returned', async () => {
+  const url = `${base}/api/v1/streams/capone/captioner`;
+  const initial = await fetch(url, { headers: auth });
+  assert.equal(initial.status, 200);
+  const before = await initial.json();
+  assert.equal(before.config.enabled, false);
+  assert.equal(before.status.state, 'off');
+
+  const updated = await fetch(url, {
+    method: 'PUT',
+    headers: auth,
+    body: json({ enabled: true, lang: 'fi', holdSeconds: 12, syncOffsetMs: 900 }),
+  });
+  assert.equal(updated.status, 200);
+  const afterPut = await updated.json();
+  assert.deepEqual(afterPut.config, { enabled: true, lang: 'fi', holdSeconds: 12, syncOffsetMs: 900 });
+  assert.equal(afterPut.status.state, 'off', 'configuration persists without starting a process before the source is live');
+
+  const afterGet = await fetch(url, { headers: auth });
+  assert.deepEqual((await afterGet.json()).config, afterPut.config);
+
+  const invalid = await fetch(url, {
+    method: 'PUT',
+    headers: auth,
+    body: json({ holdSeconds: 0 }),
+  });
+  assert.equal(invalid.status, 400);
+  assert.match((await invalid.json()).error, /holdSeconds/);
+  assert.equal((await fetch(url)).status, 401);
+});
+
 test('config routes: a control token works on its own stream only; a view token is 403', async () => {
   const control = await (await fetch(`${base}/api/v1/tokens`, {
     method: 'POST', headers: auth, body: json({ scopes: ['stream:cfgtwo:control'] }),
