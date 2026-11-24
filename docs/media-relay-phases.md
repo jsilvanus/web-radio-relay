@@ -285,5 +285,5 @@ All tasks were built on one branch (PR #13) instead of one PR each. Nothing has 
 | P7.5 viewer SSE | H+ | P7.1 | done (PR #13) |
 | P7b viewer pages | H+ | P7.5, P6.3 | done (PR #13) |
 | P8 translations | H | P7.2, P7.5 | done (PR #13) |
-| P9.1 to P9.6 captioner | S/H+ | E1, P3.3, P7.1 | E1 passed (human-confirmed 2026-11-24); P9.1-P9.5 components present; P9.6 wiring and API implemented on PR #13; awaiting CI and real-FFmpeg extraction verification |
+| P9.1 to P9.6 captioner | S/H+ | E1, P3.3, P7.1 | E1 passed (human-confirmed 2026-11-24); P9.1-P9.6 implemented; live FFmpeg/FLV integration, authenticated API and real-FFmpeg text/timing extraction tests pass in CI (2026-11-24) |
 | P10 public ingest | H | P3.2 | done (PR #13) |
