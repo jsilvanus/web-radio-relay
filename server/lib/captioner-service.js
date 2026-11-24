@@ -274,7 +274,7 @@ export function createCaptionerService({
   }
 
   async function ready(stream, configValue) {
-    const config = checkedConfig(configValue);
+    const config = checkedConfig(configValue, serviceDefaults);
     active.set(stream, config);
     live.add(stream);
     if (!config.enabled) return state(stream);
