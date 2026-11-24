@@ -198,6 +198,7 @@ export function createCaptionerService({
 
     function release(nowMs = now()) {
       if (sessions.get(stream) !== session || session.stopping) return;
+      if (session.timer) clearTimeout(session.timer);
       session.timer = null;
       const due = hold.due(nowMs);
       for (const entry of due) {
