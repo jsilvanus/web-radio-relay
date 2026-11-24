@@ -35,7 +35,9 @@
  *   DELETE /api/v1/streams/{s}/destinations/{id}       remove a destination (stops its egress)
  *   POST   /api/v1/streams/{s}/destinations/{id}/start start one egress child
  *   POST   /api/v1/streams/{s}/destinations/{id}/stop  stop one egress child
- *   GET  /api/v1/streams/{s}/captioner  CEA-608 embedder status and config (scope stream:<s>:control)\n *   PUT  /api/v1/streams/{s}/captioner  configure/start/stop the CEA-608 embedder\n *   GET  /api/v1/streams/{s}/config  per-stream config (scope stream:<s>:control)
+ *   GET  /api/v1/streams/{s}/captioner  CEA-608 embedder status and config (scope stream:<s>:control)
+ *   PUT  /api/v1/streams/{s}/captioner  configure/start/stop the CEA-608 embedder
+ *   GET  /api/v1/streams/{s}/config  per-stream config (scope stream:<s>:control)
  *   PUT  /api/v1/streams/{s}/config  set part of it: visibleLanguages, radio, videoHls, recordOnLive, publicGraphics, viewerKey
  *   POST   /api/v1/streams/{s}/recordings             start recording the stream to S3 (202, needs S3)
  *   DELETE /api/v1/streams/{s}/recordings/current     stop it: uploads the rest, writes session.json
