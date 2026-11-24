@@ -196,3 +196,10 @@ test('--tracks 2 writes a VTT per track with the same captions as the 608', { sk
   }
 });
 
+
+test('buildSchedule --lead-in: captions start after the lead-in, same spacing', () => {
+  const { captions } = buildSchedule({ fps: 30, totalFrames: 90 * 30, leadIn: 30 });
+  assert.equal(captions[0].showFrame, (30 + 6) * 30);
+  assert.equal(captions[0].clearFrame, (30 + 6 + 4) * 30);
+  assert.equal(captions[1].showFrame - captions[0].showFrame, 6 * 30);
+});

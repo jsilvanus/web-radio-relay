@@ -21,6 +21,8 @@
  *   --pairs-per-frame <n>   field-1 pairs per frame: "auto" (default) keeps the
  *                           608 rate of 30 pairs/s (25 fps: 1,1,1,1,2), or 1 or 2
  *   --align left|center     caption position (default left)
+ *   --lead-in <s>           seconds before caption 1 (default 0; use 30 so the
+ *                           first captions come after the player has started)
  *   --tracks 1|2            caption tracks: 1 = CC1 only; 2 = also CC3 (field 2),
  *                           text "E1 CC3 nro N: test" (default 1)
  *   --ffmpeg <path>         ffmpeg binary (default ffmpeg on PATH)
@@ -93,7 +95,7 @@ function units(pairs) {
  * @returns {{ frames: Map<number, number[][]>, captions: Array<{ n: number, text: string,
  *   showFrame: number, clearFrame: number, loadFrom: number, loadTo: number }>, maxSlots: number }}
  */
-export function buildSchedule({ fps, totalFrames, interval = 6, show = 4, pairsPerFrame = 'auto', text = captionText, align = 'left', channel = 1 }) {
+export function buildSchedule({ fps, totalFrames, interval = 6, show = 4, pairsPerFrame = 'auto', text = captionText, align = 'left', channel = 1, leadIn = 0 }) {
   const cap = (f) => slotsForFrame(f, fps, pairsPerFrame);
   const slots = new Map(); // frame -> array of pairs or null, length cap(f)
   const row = (f) => {
@@ -129,8 +131,8 @@ export function buildSchedule({ fps, totalFrames, interval = 6, show = 4, pairsP
   const captions = [];
   let cursor = firstOf(0); // first slot the next load may use
   for (let n = 1; ; n += 1) {
-    const showFrame = Math.round(n * interval * fps);
-    const clearFrame = Math.round((n * interval + show) * fps);
+    const showFrame = Math.round((leadIn + n * interval) * fps);
+    const clearFrame = Math.round((leadIn + n * interval + show) * fps);
     if (clearFrame + 2 >= totalFrames) break;
     const label = text(n, fps);
     const showSlot = firstOf(showFrame);
@@ -233,7 +235,7 @@ export function sourceArgs({ fps, seconds, out, interval = 6, drawtext = true })
 }
 
 function parseArgs(argv) {
-  const opts = { fps: 25, seconds: 120, interval: 6, show: 4, pairsPerFrame: 'auto', align: 'left', ffmpeg: 'ffmpeg', tracks: 1 };
+  const opts = { fps: 25, seconds: 120, interval: 6, show: 4, pairsPerFrame: 'auto', align: 'left', ffmpeg: 'ffmpeg', tracks: 1, leadIn: 0 };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
     const value = argv[i + 1];
@@ -251,6 +253,7 @@ function parseArgs(argv) {
       case '--pairs-per-frame': { const v = need(); opts.pairsPerFrame = v === 'auto' ? 'auto' : Number(v); break; }
       case '--align': opts.align = need(); break;
       case '--tracks': opts.tracks = Number(need()); break;
+      case '--lead-in': opts.leadIn = Number(need()); break;
       case '--ffmpeg': opts.ffmpeg = need(); break;
       case '--schedule': opts.schedule = need(); break;
       case '-h': case '--help': opts.help = true; break;
@@ -265,6 +268,7 @@ function parseArgs(argv) {
   if (opts.pairsPerFrame !== 'auto' && ![1, 2].includes(opts.pairsPerFrame)) throw new Error('--pairs-per-frame must be auto, 1 or 2');
   if (!['left', 'center'].includes(opts.align)) throw new Error('--align must be left or center');
   if (![1, 2].includes(opts.tracks)) throw new Error('--tracks must be 1 or 2');
+  if (!(opts.leadIn >= 0)) throw new Error('--lead-in must be 0 or more seconds');
   return opts;
 }
 
