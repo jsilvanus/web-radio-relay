@@ -193,6 +193,8 @@ export function createCaptionerService({
     };
     session.input.once('error', fail);
     session.output.once('error', fail);
+    session.input.stdout.once('error', fail);
+    session.output.stdin.once('error', fail);
     session.input.once('close', (code) => { if (!session.stopping && code !== 0) fail(new Error(`input ffmpeg exited ${code}`)); });
     session.output.once('close', (code) => { if (!session.stopping && code !== 0) fail(new Error(`output ffmpeg exited ${code}`)); });
 
