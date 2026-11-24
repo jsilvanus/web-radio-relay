@@ -1146,10 +1146,10 @@ app.get('/api/v1/streams/:name/captioner', requireStreamControl, streamFromReque
   res.json({ stream: req.stream, config, status: captionerService.state(req.stream) });
 });
 
-app.put('/api/v1/streams/:name/captioner', requireStreamControl, streamFromRequest, (req, res) => {
+app.put('/api/v1/streams/:name/captioner', requireStreamControl, streamFromRequest, async (req, res) => {
   try {
     const stored = putConfig(db, req.stream, { captioner: req.body ?? {} }, Date.now());
-    const status = captionerService.configure(req.stream, stored.captioner);
+    const status = await captionerService.configure(req.stream, stored.captioner);
     res.json({ stream: req.stream, config: stored.captioner, status });
   } catch (err) {
     if (err instanceof StreamConfigError) return res.status(err.status).json({ error: err.message });
