@@ -276,7 +276,7 @@ export function createReadyHandler({
       const hlsState = stopHls(stream, failed);
       const recording = await stopRecording(stream, failed);
       const action = failed.length ? 'error' : 'stop';
-      return { action, stream, radio, destinations, hls: hlsState, recording, ...(captioner ? { captioner: captionerState } : {}), failed };
+      return { action, stream, radio, destinations, hls: hlsState, recording, ...(captionerState !== 'ignored' ? { captioner: captionerState } : {}), failed };
     },
   };
 }
