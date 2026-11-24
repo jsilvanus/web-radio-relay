@@ -38,7 +38,7 @@ export function embedCaptionFrame({ data, timestamp, scheduler, fps, wallTimeMs,
   if (video.codecId !== 7 || video.avcPacketType !== AVC_NALU || video.nalus.length === 0) return data;
   const ptsMs = timestamp + video.compositionTime;
   const frameIndex = Math.max(0, Math.round((ptsMs * fps) / 1000));
-  const pairs = scheduler.pairsForFrame(frameIndex, wallTimeMs - syncOffsetMs);
+  const pairs = scheduler.pairsForFrame(frameIndex, wallTimeMs + video.compositionTime - syncOffsetMs);
   const sei = a53SeiNal(pairs, { count: scheduler.ccCount });
   return buildVideoTag({ ...video, nalus: [sei, ...video.nalus] });
 }
