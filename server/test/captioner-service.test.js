@@ -116,3 +116,34 @@ test('captioner refuses unsupported source video instead of publishing a broken 
   assert.equal(spawned, 0);
   service.close();
 });
+
+
+test('enabling the captioner after the source is already live probes and starts it', async () => {
+  let probeInfo = null;
+  let probes = 0;
+  let spawned = 0;
+  const service = createCaptionerService({
+    spawnProcess(_command, args) {
+      spawned += 1;
+      return fakeChild(args.includes('pipe:1') ? 'input' : 'output');
+    },
+    getProbe: () => probeInfo,
+    probe: async () => {
+      probes += 1;
+      probeInfo = { video: { codec: 'h264', fps: 30 } };
+      return probeInfo;
+    },
+    bus: { subscribe: () => () => {} },
+    secret: 'secret',
+  });
+  try {
+    const off = await service.ready('church', { enabled: false, lang: 'fi', holdSeconds: 16, syncOffsetMs: 1500 });
+    assert.equal(off.state, 'off');
+    const on = await service.configure('church', { enabled: true, lang: 'fi', holdSeconds: 16, syncOffsetMs: 1500 });
+    assert.equal(on.state, 'running');
+    assert.equal(probes, 1);
+    assert.equal(spawned, 2);
+  } finally {
+    service.notready('church');
+  }
+});
