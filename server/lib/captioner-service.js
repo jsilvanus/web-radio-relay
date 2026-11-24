@@ -131,7 +131,7 @@ export function createCaptionerService({
     return { stream, state: 'off', running: false };
   }
 
-  function start(stream, configValue) {
+  function start(stream, configValue, probeOverride = null) {
     const config = checkedConfig(configValue, serviceDefaults);
     active.set(stream, config);
     if (!config.enabled) {
@@ -140,7 +140,7 @@ export function createCaptionerService({
     }
     if (sessions.has(stream)) stop(stream, 'reconfiguring');
 
-    const probeInfo = getProbe(stream);
+    const probeInfo = probeOverride || getProbe(stream);
     const fps = frameRate(probeInfo);
     if (!fps || probeInfo?.video?.codec !== 'h264') {
       const message = !probeInfo?.video
@@ -291,7 +291,7 @@ export function createCaptionerService({
     if ((!probeInfo?.video || !frameRate(probeInfo)) && typeof probe === 'function') {
       try { probeInfo = await probe(stream); } catch { /* reported by start() */ }
     }
-    return start(stream, config);
+    return start(stream, config, probeInfo);
   }
 
   async function configure(stream, configValue) {
@@ -303,7 +303,7 @@ export function createCaptionerService({
         if ((!probeInfo?.video || !frameRate(probeInfo)) && typeof probe === 'function') {
           try { await probe(stream); } catch { /* start() returns the useful status */ }
         }
-        return start(stream, config);
+        return start(stream, config, probeInfo);
       }
       stop(stream, 'disabled');
     }
