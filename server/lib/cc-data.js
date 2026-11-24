@@ -51,7 +51,9 @@ export function ccDataPayload(pairs, { count, header = 'ffmpeg' } = {}) {
     const at = 2 + i * 3;
     if (i < pairs.length) {
       const [b1, b2] = pairs[i];
-      out[at] = 0xf8 | 0x04 | CC_TYPE_FIELD1; // marker, cc_valid 1, cc_type 0
+      // cc_type 1 (field 2) when the pair was tagged `field: 2`, else field 1
+      const type = pairs[i].field === 2 ? CC_TYPE_FIELD2 : CC_TYPE_FIELD1;
+      out[at] = 0xf8 | 0x04 | type; // marker, cc_valid 1, cc_type
       out[at + 1] = b1 & 0xff;
       out[at + 2] = b2 & 0xff;
     } else {

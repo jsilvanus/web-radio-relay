@@ -66,3 +66,29 @@ Other options: `--interval` and `--show` (seconds between captions and on screen
 | | 30 | auto (1) | | | | | |
 
 E1 passes when 25 fps and 30 fps both show the captions with correct Finnish letters and stable timing. If only 30 fps works, the plan's fallback applies (fleet `libx264 -a53cc` re-encode, or the LCYT HTTP caption POST with the delayed stream); write the result here and in the phase plan.
+
+## Follow-up (2026-11-24): VTT, two tracks, language
+
+**Result of the 25 fps run:** YouTube shows the 608 captions in the picture with the right Finnish letters and the timing matches the burned clock. The captions are in the video, not in a caption track YouTube lets us download (`captions.list` needs `youtube.force-ssl`, which the Pi's sign-in lacks), so the VTT must come from us.
+
+**VTT next to the 608.** `server/lib/vtt.js` writes WebVTT in the same format as LCYT's caption files (`packages/lcyt-backend/src/caption-files.js`). `e1-make-test.mjs` writes `<out>.cc1.vtt` (and `<out>.cc3.vtt` with `--tracks 2`) on the file's timeline. The real captioner should write the VTT from the same cues it embeds.
+
+**Language.** CEA-608 has no language field: a caption track carries only its channel (CC1 to CC4). The name "English - CC1" comes from YouTube's side, not from the stream. Unverified: whether a YouTube live setting or the API sets the language of an embedded track. Check in YouTube Studio (broadcast, closed captions) before relying on it.
+
+**Two tracks.** `--tracks 2` adds CC3: field 2, data channel 1, text `E1 CC3 nro N: test` (ASCII only), in the same frames as CC1. Each pair of CC3 is tagged `cc_type 1` in cc_data. ffmpeg decodes CC3 captions sent as field 2 alone (test `CC3 (field 2)`); with both fields in one file, ffmpeg's decoder reads only the first field that appears, so that check needs a YouTube run. At 30 fps two tracks means two pairs per frame (cc_count 2), which is twice the 608 data rate of one channel. YouTube documents one track, so this is the test.
+
+**Pi steps for the next run** (the test stream `YP68iNhke-dDXCNPHhCZ3Q1795413356473763` can be reused; create a new private broadcast with embedded 608 captions):
+
+```sh
+node server/scripts/e1-make-test.mjs --fps 30 --seconds 600 --tracks 2 --out /home/pi/apps/e1-608/e1-30-2tracks.flv
+ffmpeg -re -stream_loop -1 -i /home/pi/apps/e1-608/e1-30-2tracks.flv -c copy -f flv "rtmp://a.rtmp.youtube.com/live2/$KEY"
+```
+
+Watch with CC on and check CC1 (Finnish text) and CC3 (`E1 CC3 nro N`). Record what YouTube shows for each track name.
+
+| Date | fps | Tracks | Result |
+|---|---|---|---|
+| 2026-11-23 | 25 | 1 (CC1) | Captions shown from nro 4 with correct letters; nro 1-3 not shown; track labelled English - CC1 |
+| | 30 | 1 (CC1) | not run |
+| | 30 | 2 (CC1 + CC3) | not run |
+

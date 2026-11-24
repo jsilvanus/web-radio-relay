@@ -41,28 +41,39 @@ function pair(b1, b2) {
 /** Padding pair (two nulls with parity). */
 export const PADDING = Object.freeze([0x80, 0x80]);
 
-// Miscellaneous control codes, channel 1 (first byte 0x14 on field 1).
-const MISC = 0x14;
+// Miscellaneous control codes. The first byte says the channel: 0x14 = CC1 (field 1),
+// 0x15 = CC3 (field 2, data channel 1). Channel 3 goes in cc_type 1 (see cc-data.js).
+const MISC_CC1 = 0x14;
+const MISC_CC3 = 0x15;
 export const RCL = 0x20; // resume caption loading (pop-on)
 export const EDM = 0x2c; // erase displayed memory
 export const ENM = 0x2e; // erase non-displayed memory
 export const EOC = 0x2f; // end of caption (flip memories)
 
-/** One miscellaneous control code pair for CC1. */
-export function controlPair(code) {
-  return pair(MISC, code);
+/** Channels this encoder writes: 1 = CC1 (field 1), 3 = CC3 (field 2). */
+export const CHANNELS = Object.freeze([1, 3]);
+
+function miscFor(channel) {
+  if (channel === 1) return MISC_CC1;
+  if (channel === 3) return MISC_CC3;
+  throw new RangeError('channel must be 1 or 3');
 }
-export function rclPair() {
-  return controlPair(RCL);
+
+/** One miscellaneous control code pair for CC1 (default) or CC3. */
+export function controlPair(code, channel = 1) {
+  return pair(miscFor(channel), code);
 }
-export function enmPair() {
-  return controlPair(ENM);
+export function rclPair(channel = 1) {
+  return controlPair(RCL, channel);
 }
-export function eocPair() {
-  return controlPair(EOC);
+export function enmPair(channel = 1) {
+  return controlPair(ENM, channel);
 }
-export function edmPair() {
-  return controlPair(EDM);
+export function eocPair(channel = 1) {
+  return controlPair(EOC, channel);
+}
+export function edmPair(channel = 1) {
+  return controlPair(EDM, channel);
 }
 
 /** Control pair sent twice, as the standard recommends. */
@@ -252,14 +263,15 @@ export function splitCaption(text, { maxChars = MAX_COLUMNS, maxRows = MAX_ROWS 
  *   characters that had no 608 code
  * @throws {RangeError} when the text needs more than `rows.length` lines
  */
-export function encodePopOn(text, { rows = [14, 15], align = 'left' } = {}) {
+export function encodePopOn(text, { rows = [14, 15], align = 'left', channel = 1 } = {}) {
+  miscFor(channel);
   const lines = wrapText(text, MAX_COLUMNS);
   if (lines.length === 0) throw new RangeError('caption text is empty');
   if (lines.length > rows.length) {
     throw new RangeError(`caption needs ${lines.length} lines, only ${rows.length} rows; split it with splitCaption()`);
   }
   const useRows = rows.slice(rows.length - lines.length);
-  const pairs = [...doubled(rclPair()), ...doubled(enmPair())];
+  const pairs = [...doubled(rclPair(channel)), ...doubled(enmPair(channel))];
   let replaced = 0;
   lines.forEach((line, i) => {
     const length = [...line].length;

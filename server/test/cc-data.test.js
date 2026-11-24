@@ -85,3 +85,12 @@ test('a53SeiNal output holds no start-code-like 00 00 0x sequence', () => {
   }
   assert.deepEqual(parseA53Sei(nal).pairs, [[0x00, 0x00], [0x00, 0x00]]);
 });
+
+test('ccDataPayload: a pair tagged field 2 is written with cc_type 1', () => {
+  const pair = [0x15, 0x20];
+  pair.field = 2;
+  const out = ccDataPayload([pair, [0x14, 0x20]], { count: 2 });
+  assert.equal(out[2], 0xfd); // marker 11111, cc_valid 1, cc_type 1
+  assert.equal(out[5], 0xfc); // untagged pair: cc_type 0
+  assert.equal(out[3], 0x15);
+});

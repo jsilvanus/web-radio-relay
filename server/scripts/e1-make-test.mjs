@@ -21,8 +21,13 @@
  *   --pairs-per-frame <n>   field-1 pairs per frame: "auto" (default) keeps the
  *                           608 rate of 30 pairs/s (25 fps: 1,1,1,1,2), or 1 or 2
  *   --align left|center     caption position (default left)
+ *   --tracks 1|2            caption tracks: 1 = CC1 only; 2 = also CC3 (field 2),
+ *                           text "E1 CC3 nro N: test" (default 1)
  *   --ffmpeg <path>         ffmpeg binary (default ffmpeg on PATH)
  *   --schedule <file>       also write the caption schedule as JSON
+ *
+ * Also writes <out>.cc1.vtt (and <out>.cc3.vtt with --tracks 2): the same captions
+ * as WebVTT, on the file's timeline (the server's VTT writer, server/lib/vtt.js).
  */
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -32,6 +37,7 @@ import { pathToFileURL } from 'node:url';
 import { createFlvParser, parseVideoTag, buildVideoTag, writeFlvHeader, writeTag, TAG_VIDEO, AVC_CODEC_ID, AVC_NALU } from '../lib/flv.js';
 import { encodePopOn, eocPair, edmPair, PADDING } from '../lib/cea608.js';
 import { a53SeiNal } from '../lib/cc-data.js';
+import { buildVtt } from '../lib/vtt.js';
 
 /** 608 field-1 data rate: two bytes per frame at (about) 30 fps. */
 const PAIRS_PER_SECOND = 30;
@@ -39,6 +45,11 @@ const PAIRS_PER_SECOND = 30;
 /** Default caption text for caption number n. */
 export function captionText(n, fps) {
   return `E1 testi ${fps} fps nro ${n}: äöå ÄÖÅ`;
+}
+
+/** Caption N on the second track (CC3, field 2). ASCII only: see docs/e1-youtube-608.md. */
+export function captionTextB(n) {
+  return `E1 CC3 nro ${n}: test`;
 }
 
 /**
@@ -82,7 +93,7 @@ function units(pairs) {
  * @returns {{ frames: Map<number, number[][]>, captions: Array<{ n: number, text: string,
  *   showFrame: number, clearFrame: number, loadFrom: number, loadTo: number }>, maxSlots: number }}
  */
-export function buildSchedule({ fps, totalFrames, interval = 6, show = 4, pairsPerFrame = 'auto', text = captionText, align = 'left' }) {
+export function buildSchedule({ fps, totalFrames, interval = 6, show = 4, pairsPerFrame = 'auto', text = captionText, align = 'left', channel = 1 }) {
   const cap = (f) => slotsForFrame(f, fps, pairsPerFrame);
   const slots = new Map(); // frame -> array of pairs or null, length cap(f)
   const row = (f) => {
@@ -124,10 +135,10 @@ export function buildSchedule({ fps, totalFrames, interval = 6, show = 4, pairsP
     const label = text(n, fps);
     const showSlot = firstOf(showFrame);
     if (showSlot[0] !== showFrame || !isFree(showSlot)) throw new Error(`frame ${showFrame} has no free first slot for EOC`);
-    const [, eocEnd] = placeUnit(showSlot, [eocPair(), eocPair()]);
+    const [, eocEnd] = placeUnit(showSlot, [eocPair(channel), eocPair(channel)]);
     let loadFrom = null;
     let loadTo = null;
-    for (const unit of units(encodePopOn(label, { align }))) {
+    for (const unit of units(encodePopOn(label, { align, channel }))) {
       const [a, b] = placeUnit(cursor, unit);
       if (b[0] >= showFrame) throw new Error(`caption ${n} does not fit before ${showFrame / fps} s; lengthen the interval`);
       loadFrom ??= a[0];
@@ -136,7 +147,7 @@ export function buildSchedule({ fps, totalFrames, interval = 6, show = 4, pairsP
     }
     const clearSlot = firstOf(clearFrame);
     if (!isFree(clearSlot)) throw new Error(`frame ${clearFrame} has no free first slot for EDM`);
-    placeUnit(clearSlot, [edmPair(), edmPair()]);
+    placeUnit(clearSlot, [edmPair(channel), edmPair(channel)]);
     cursor = after(eocEnd);
     captions.push({ n, text: label, showFrame, clearFrame, loadFrom, loadTo });
   }
@@ -222,7 +233,7 @@ export function sourceArgs({ fps, seconds, out, interval = 6, drawtext = true })
 }
 
 function parseArgs(argv) {
-  const opts = { fps: 25, seconds: 120, interval: 6, show: 4, pairsPerFrame: 'auto', align: 'left', ffmpeg: 'ffmpeg' };
+  const opts = { fps: 25, seconds: 120, interval: 6, show: 4, pairsPerFrame: 'auto', align: 'left', ffmpeg: 'ffmpeg', tracks: 1 };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
     const value = argv[i + 1];
@@ -239,6 +250,7 @@ function parseArgs(argv) {
       case '--show': opts.show = Number(need()); break;
       case '--pairs-per-frame': { const v = need(); opts.pairsPerFrame = v === 'auto' ? 'auto' : Number(v); break; }
       case '--align': opts.align = need(); break;
+      case '--tracks': opts.tracks = Number(need()); break;
       case '--ffmpeg': opts.ffmpeg = need(); break;
       case '--schedule': opts.schedule = need(); break;
       case '-h': case '--help': opts.help = true; break;
@@ -252,13 +264,14 @@ function parseArgs(argv) {
   if (!(opts.interval > 0) || !(opts.show > 0) || opts.show >= opts.interval) throw new Error('--show must be > 0 and below --interval');
   if (opts.pairsPerFrame !== 'auto' && ![1, 2].includes(opts.pairsPerFrame)) throw new Error('--pairs-per-frame must be auto, 1 or 2');
   if (!['left', 'center'].includes(opts.align)) throw new Error('--align must be left or center');
+  if (![1, 2].includes(opts.tracks)) throw new Error('--tracks must be 1 or 2');
   return opts;
 }
 
 export function main(argv) {
   const opts = parseArgs(argv);
   if (opts.help) {
-    process.stdout.write('usage: e1-make-test.mjs --fps 25 --seconds 120 --out e1-25.flv [--interval 6] [--show 4] [--pairs-per-frame auto|1|2] [--align left|center] [--schedule file.json]\n');
+    process.stdout.write('usage: e1-make-test.mjs --fps 25 --seconds 120 --out e1-25.flv [--interval 6] [--show 4] [--pairs-per-frame auto|1|2] [--align left|center] [--tracks 1|2] [--schedule file.json]\n');
     return 0;
   }
   const dir = mkdtempSync(join(tmpdir(), 'e1-'));
@@ -275,14 +288,30 @@ export function main(argv) {
 
     const totalFrames = Math.round(opts.seconds * opts.fps);
     const schedule = buildSchedule({ ...opts, totalFrames });
-    const pairsFor = (f) => {
-      const pairs = [...(schedule.frames.get(f) ?? [])];
-      while (pairs.length < slotsForFrame(f, opts.fps, opts.pairsPerFrame)) pairs.push([...PADDING]);
-      return pairs;
+    const schedules = [{ channel: 1, schedule }];
+    if (opts.tracks === 2) {
+      schedules.push({ channel: 3, schedule: buildSchedule({ ...opts, totalFrames, channel: 3, text: captionTextB }) });
+    }
+    // Per frame: track 1's slots first (field 1), then track 2's (field 2), each padded to the rate.
+    const padded = ({ channel, schedule: sch }, f) => {
+      const list = [...(sch.frames.get(f) ?? [])];
+      while (list.length < slotsForFrame(f, opts.fps, opts.pairsPerFrame)) list.push([...PADDING]);
+      return list.map((p) => Object.assign([...p], { field: channel === 3 ? 2 : 1 }));
     };
-    const result = insertCaptions(readFileSync(source), { fps: opts.fps, pairsFor, count: schedule.maxSlots });
+    const pairsFor = (f) => schedules.flatMap((t) => padded(t, f));
+    const count = schedules.reduce((sum, t) => sum + t.schedule.maxSlots, 0);
+    const result = insertCaptions(readFileSync(source), { fps: opts.fps, pairsFor, count });
     writeFileSync(opts.out, result.flv);
     const origin = (result.originMs ?? 0) / 1000;
+    const base = opts.out.replace(/\.flv$/i, '');
+    for (const t of schedules) {
+      const cues = t.schedule.captions.map((c) => ({
+        startMs: Math.round((origin + c.showFrame / opts.fps) * 1000),
+        endMs: Math.round((origin + c.clearFrame / opts.fps) * 1000),
+        text: c.text,
+      }));
+      writeFileSync(`${base}.cc${t.channel}.vtt`, buildVtt(cues));
+    }
     const summary = schedule.captions.map((c) => ({
       n: c.n,
       text: c.text,
@@ -297,7 +326,8 @@ export function main(argv) {
       writeFileSync(opts.schedule, `${JSON.stringify({ fps: opts.fps, videoStartSeconds: origin, captions: summary }, null, 2)}\n`);
     }
     process.stderr.write(`${opts.out}: ${result.frames} video frames, ${result.inserted} SEI inserted, ${summary.length} captions `
-      + `(${opts.interval} s apart, ${opts.show} s on screen), cc_count ${schedule.maxSlots}\n`);
+      + `(${opts.interval} s apart, ${opts.show} s on screen), ${opts.tracks} track(s), cc_count ${count}\n`
+      + `wrote ${schedules.map((t) => `${base}.cc${t.channel}.vtt`).join(', ')}\n`);
     return 0;
   } finally {
     rmSync(dir, { recursive: true, force: true });

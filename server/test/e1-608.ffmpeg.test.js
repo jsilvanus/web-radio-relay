@@ -6,14 +6,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildSchedule, slotsForFrame, insertCaptions, sourceArgs, captionText } from '../scripts/e1-make-test.mjs';
+import { buildSchedule, slotsForFrame, insertCaptions, sourceArgs, captionText, captionTextB } from '../scripts/e1-make-test.mjs';
 import { createFlvParser, parseVideoTag, buildVideoTag, writeFlvHeader, writeTag, TAG_VIDEO, AVC_NALU } from '../lib/flv.js';
 import { parseA53Sei } from '../lib/cc-data.js';
-import { eocPair, edmPair } from '../lib/cea608.js';
+import { eocPair, edmPair, PADDING } from '../lib/cea608.js';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'e1-make-test.mjs');
 const hasFfmpeg = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
@@ -152,3 +152,47 @@ test('insertCaptions changes nothing but the added SEI NAL units', { skip: SKIP,
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('CC3 (field 2): ffmpeg decodes captions that are sent as field 2 alone', { skip: SKIP, timeout: 120_000 }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'e1-cc3-'));
+  try {
+    const bare = join(dir, 'bare.flv');
+    const made = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-nostdin', '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=30',
+      '-t', '20', '-c:v', 'libx264', '-tune', 'zerolatency', '-bf', '0', '-g', '60', '-pix_fmt', 'yuv420p', '-an', '-f', 'flv', bare], { encoding: 'utf8' });
+    assert.equal(made.status, 0, made.stderr);
+    const fps = 30;
+    const sch = buildSchedule({ fps, totalFrames: 20 * fps, channel: 3, text: captionTextB, pairsPerFrame: 1 });
+    const pairsFor = (f) => {
+      const list = [...(sch.frames.get(f) ?? [])];
+      if (list.length === 0) list.push([...PADDING]);
+      return list.map((p) => Object.assign([...p], { field: 2 }));
+    };
+    const out = join(dir, 'cc3.flv');
+    writeFileSync(out, insertCaptions(readFileSync(bare), { fps, pairsFor, count: 1 }).flv);
+    const decoded = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-nostdin',
+      '-f', 'lavfi', '-i', `movie=${out}[out0+subcc]`, '-map', '0:s', '-f', 'srt', '-'], { encoding: 'utf8' });
+    assert.equal(decoded.status, 0, decoded.stderr);
+    const cues = parseSrt(decoded.stdout);
+    assert.deepEqual(cues.map((c) => c.text), sch.captions.map((c) => captionTextB(c.n)));
+    cues.forEach((cue, i) => assert.ok(Math.abs(cue.start - sch.captions[i].showFrame / fps) <= 1 / fps + 0.0015));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--tracks 2 writes a VTT per track with the same captions as the 608', { skip: SKIP, timeout: 120_000 }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'e1-vtt-'));
+  try {
+    const out = join(dir, 'e1-25.flv');
+    const made = spawnSync(process.execPath, [SCRIPT, '--fps', '25', '--seconds', '20', '--tracks', '2', '--out', out], { encoding: 'utf8' });
+    assert.equal(made.status, 0, made.stderr);
+    const cc1 = readFileSync(join(dir, 'e1-25.cc1.vtt'), 'utf8');
+    const cc3 = readFileSync(join(dir, 'e1-25.cc3.vtt'), 'utf8');
+    assert.match(cc1, /^WEBVTT\n\n1\n00:00:06\.0\d\d --> 00:00:10\.0\d\d\n/);
+    assert.ok(cc1.includes(`${captionText(1, 25)}\n`) && cc1.includes(`${captionText(2, 25)}\n`));
+    assert.ok(cc3.includes(`${captionTextB(1)}\n`) && cc3.includes(`${captionTextB(2)}\n`));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+

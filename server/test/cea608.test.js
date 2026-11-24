@@ -121,3 +121,15 @@ test('encodePopOn: too long or empty text throws; replaced count', () => {
   assert.equal(encodePopOn('a € b').replaced, 1);
   assert.equal(encodePopOn('äö').replaced, 0);
 });
+
+test('channel 3 (CC3, field 2): misc codes start with 0x15, text and PAC unchanged', () => {
+  assert.deepEqual(rclPair(3), [0x15, 0x20]);
+  assert.deepEqual(eocPair(3), [0x15, 0x2f]);
+  assert.deepEqual(rclPair(), [0x94, 0x20]); // 0x14 gets bit 7 for odd parity
+  const cc1 = encodePopOn('Hi', { rows: [15] });
+  const cc3 = encodePopOn('Hi', { rows: [15], channel: 3 });
+  assert.equal(cc3.length, cc1.length);
+  assert.deepEqual(cc3[0], [0x15, 0x20]);
+  assert.deepEqual(cc3.slice(4), cc1.slice(4)); // PAC and text are the same bytes
+  assert.throws(() => encodePopOn('x', { channel: 2 }), RangeError);
+});
