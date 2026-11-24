@@ -341,7 +341,7 @@ test('captioner: real ffmpeg FLV round trip exposes 608 text at the scheduled PT
       if (first < 0x20 || first > 0x7e) return []; // control/PAC pair
       return [String.fromCharCode(first), ...(second >= 0x20 && second <= 0x7e ? [String.fromCharCode(second)] : [])];
     }).join('');
-    assert.match(decodedChars, /Hei\\s+maailma/i, 'the inserted A/53 triplets carry the expected characters');
+    assert.match(decodedChars, /Hei\s+maailma/i, 'the inserted A/53 triplets carry the expected characters');
     writeFileSync(embeddedFile, Buffer.concat(output));
 
     // Remux only: the AVC access units (including our SEI) remain bit-identical.
@@ -371,8 +371,8 @@ test('captioner: real ffmpeg FLV round trip exposes 608 text at the scheduled PT
     assert.equal(extracted.code, 0, extracted.stderr);
     assert.ok(existsSync(subtitlesFile), 'FFmpeg extracted an SRT caption track');
     const srt = readFileSync(subtitlesFile, 'utf8');
-    assert.match(srt, /Hei\\s+maailma/i, 'decoded text matches the caption sent to the scheduler');
-    const cue = /(\\d{2}):(\\d{2}):(\\d{2}),(\\d{3}) --> (\\d{2}):(\\d{2}):(\\d{2}),(\\d{3})/.exec(srt);
+    assert.match(srt, /Hei\s+maailma/i, 'decoded text matches the caption sent to the scheduler');
+    const cue = /(\d{2}):(\d{2}):(\d{2}),(\d{3}) --> (\d{2}):(\d{2}):(\d{2}),(\d{3})/.exec(srt);
     assert.ok(cue, 'FFmpeg produced a timed subtitle cue');
     const toMs = (h, m, s, ms) => (((Number(h) * 60 + Number(m)) * 60 + Number(s)) * 1000) + Number(ms);
     const startMs = toMs(cue[1], cue[2], cue[3], cue[4]);
