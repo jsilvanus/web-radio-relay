@@ -297,7 +297,7 @@ test('captioner: real ffmpeg FLV round trip exposes 608 text at the scheduled PT
       ...LOG,
       '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=25',
       '-f', 'lavfi', '-i', 'sine=frequency=440',
-      '-t', '8', '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+      '-t', '8', '-c:v', 'libx264', '-bf', '0', '-pix_fmt', 'yuv420p',
       '-c:a', 'aac', '-f', 'flv', sourceFile,
     ]);
     procs.push(source);
