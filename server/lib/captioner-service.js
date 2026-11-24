@@ -255,40 +255,14 @@ export function createCaptionerService({
   }
 
   async function ready(stream, configValue) {
-    active.set(stream, checkedConfig(configValue));
-    if (!active.get(stream).enabled) return state(stream);
+    const config = checkedConfig(configValue);
+    active.set(stream, config);
+    if (!config.enabled) return state(stream);
     let probeInfo = getProbe(stream);
     if ((!probeInfo?.video || !frameRate(probeInfo)) && typeof probe === 'function') {
-      try { probeInfo = await probe(stream); } catch { /* reported below */ }
+      try { probeInfo = await probe(stream); } catch { /* reported by start() */ }
     }
-    // getProbe may be backed by an in-memory cache; the returned probe result is
-    // passed directly to start when the probe service has not cached it yet.
-    if (probeInfo?.video && !getProbe(stream)) {
-      const original = getProbe;
-      // startWithProbe is intentionally local; no shared mutable probe cache.
-      return startWithProbe(stream, active.get(stream), probeInfo, original);
-    }
-    return start(stream, active.get(stream));
-  }
-
-  function startWithProbe(stream, config, probeInfo) {
-    const old = getProbe;
-    const fps = frameRate(probeInfo);
-    if (!fps || probeInfo?.video?.codec !== 'h264') {
-      sessions.set(stream, { config, state: 'failed', error: 'input must be H.264 at a supported frame rate' });
-      return state(stream);
-    }
-    // Cache just this probe result for the duration of this start.
-    const cachedGetProbe = (name) => name === stream ? probeInfo : old(name);
-    const service = createCaptionerService({
-      spawnProcess, getProbe: cachedGetProbe, probe, bus, rtspBase, rtmpBase, secret,
-      defaultHoldSeconds, defaultSyncOffsetMs, now, log,
-    });
-    // Avoid a nested service instance: this path is only used if the probe cache
-    // has not yet been populated. Normally createProbeService caches before resolve.
-    const result = service.start(stream, config);
-    sessions.set(stream, { state: result.state, config, error: result.error, delegated: service });
-    return result;
+    return start(stream, config);
   }
 
   function configure(stream, configValue) {
