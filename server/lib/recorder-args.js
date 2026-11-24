@@ -1,0 +1,55 @@
+/**
+ * Copy-only ffmpeg arguments that record one relay stream as fragmented MP4
+ * segments into a spool directory, plus the rule for which segments are safe
+ * to upload. Pure: no I/O.
+ */
+import {
+  assertStreamName, assertPathSegment, assertPositiveInteger, assertDirectory, streamInputArgs,
+} from './ffmpeg-input.js';
+
+const SEGMENT_FILE = /^\d{6}\.mp4$/;
+
+/**
+ * @param {{ stream: string, spoolDir: string, sessionId: string, segmentSeconds?: number,
+ *   rtspBase?: string, inputArgs?: { input: string }, segmentStartNumber?: number }} options
+ *   segmentStartNumber: first file number of a relaunched recorder (omitted = 0, as before)
+ * @returns {string[]}
+ */
+export function recorderArgs({
+  stream, spoolDir, sessionId, segmentSeconds = 60, rtspBase, inputArgs, segmentStartNumber,
+} = {}) {
+  assertStreamName(stream);
+  const dir = assertDirectory(spoolDir, 'spoolDir');
+  assertPathSegment(sessionId, 'sessionId');
+  assertPositiveInteger(segmentSeconds, 'segmentSeconds');
+  if (segmentStartNumber !== undefined && (!Number.isInteger(segmentStartNumber) || segmentStartNumber < 0)) {
+    throw new Error('invalid segmentStartNumber: expected an integer >= 0');
+  }
+  const startNumber = segmentStartNumber === undefined ? [] : ['-segment_start_number', String(segmentStartNumber)];
+
+  return [
+    ...streamInputArgs({ stream, rtspBase, inputArgs }),
+    '-map', '0',
+    '-c', 'copy',
+    '-f', 'segment',
+    '-segment_time', String(segmentSeconds),
+    '-segment_format', 'mp4',
+    '-segment_format_options', 'movflags=+frag_keyframe+empty_moov+default_base_moof',
+    '-reset_timestamps', '1',
+    ...startNumber,
+    `${dir}/${sessionId}/%06d.mp4`,
+  ];
+}
+
+/**
+ * Segments that ffmpeg has finished writing: every `NNNNNN.mp4` name in order
+ * except the newest one, which ffmpeg may still be writing. Other names are ignored.
+ * @param {string[]} fileNames
+ * @returns {string[]}
+ */
+export function closedSegments(fileNames) {
+  const names = (fileNames || [])
+    .filter((name) => typeof name === 'string' && SEGMENT_FILE.test(name))
+    .sort();
+  return names.slice(0, -1);
+}

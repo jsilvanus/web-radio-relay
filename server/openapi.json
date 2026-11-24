@@ -141,6 +141,93 @@
           }
         }
       },
+      "CaptionerConfig": {
+        "type": "object",
+        "required": ["enabled", "lang", "holdSeconds", "syncOffsetMs"],
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "lang": { "type": "string", "pattern": "^[a-z]{2,3}(-[a-z0-9]{1,8})*$", "default": "fi" },
+          "holdSeconds": { "type": "number", "minimum": 1, "maximum": 60, "default": 16 },
+          "syncOffsetMs": { "type": "integer", "minimum": -10000, "maximum": 10000, "default": 1500 }
+        }
+      },
+      "CaptionerConfigPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "lang": { "type": "string", "pattern": "^[a-z]{2,3}(-[a-z0-9]{1,8})*$" },
+          "holdSeconds": { "type": "number", "minimum": 1, "maximum": 60 },
+          "syncOffsetMs": { "type": "integer", "minimum": -10000, "maximum": 10000 }
+        }
+      },
+      "CaptionerResponse": {
+        "type": "object",
+        "required": ["stream", "config", "status"],
+        "properties": {
+          "stream": { "type": "string" },
+          "config": { "$ref": "#/components/schemas/CaptionerConfig" },
+          "status": {
+            "type": "object",
+            "properties": {
+              "state": { "type": "string", "enum": ["off", "waiting", "starting", "running", "failed"] },
+              "running": { "type": "boolean" },
+              "holdSeconds": { "type": "number" },
+              "captionsEmbedded": { "type": "integer" },
+              "lateCount": { "type": "integer" },
+              "lateMsMax": { "type": "number" },
+              "replacedCharacters": { "type": "integer" },
+              "pendingCaptions": { "type": "integer" },
+              "error": { "type": ["string", "null"] }
+            }
+          }
+        }
+      },
+      "StreamConfig": {
+        "type": "object",
+        "required": ["visibleLanguages", "radio", "videoHls", "recordOnLive", "publicGraphics", "viewerKey", "captioner"],
+        "properties": {
+          "visibleLanguages": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10,
+            "items": { "type": "string", "example": "fi" },
+            "description": "Languages viewers get (translations and composedText). Default [\"fi\"]."
+          },
+          "radio": { "type": "boolean", "description": "Start the radio pull when MediaMTX reports the source ready. Default true." },
+          "videoHls": { "type": "boolean", "description": "Stored for the video phase; no effect yet. Default false." },
+          "recordOnLive": { "type": "boolean", "description": "Stored for the recording phase; no effect yet. Default false." },
+          "publicGraphics": { "type": "boolean", "description": "Send graphic events to viewers. Default true." },
+          "viewerKey": {
+            "type": ["string", "null"],
+            "pattern": "^[a-z0-9_-]{8,64}$",
+            "description": "Key for /api/v1/viewer/{viewerKey}, or null (the stream name opens the viewer). Default null."
+          },
+          "captioner": { "$ref": "#/components/schemas/CaptionerConfig" }
+        }
+      },
+      "StreamConfigPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Any subset of the StreamConfig fields.",
+        "properties": {
+          "visibleLanguages": { "type": "array", "minItems": 1, "maxItems": 10, "items": { "type": "string" } },
+          "radio": { "type": "boolean" },
+          "videoHls": { "type": "boolean" },
+          "recordOnLive": { "type": "boolean" },
+          "publicGraphics": { "type": "boolean" },
+          "viewerKey": { "type": ["string", "null"], "pattern": "^[a-z0-9_-]{8,64}$" },
+          "captioner": { "$ref": "#/components/schemas/CaptionerConfigPatch" }
+        }
+      },
+      "StreamConfigResponse": {
+        "type": "object",
+        "required": ["stream", "config"],
+        "properties": {
+          "stream": { "type": "string" },
+          "config": { "$ref": "#/components/schemas/StreamConfig" }
+        }
+      },
       "Delay": {
         "type": "object",
         "required": [
@@ -197,6 +284,117 @@
           "filename": {
             "type": "string",
             "description": "Required for archive-play."
+          }
+        }
+      },
+      "TokenRequest": {
+        "type": "object",
+        "required": [
+          "scopes"
+        ],
+        "properties": {
+          "scopes": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10,
+            "description": "Each scope is admin or stream:<name>:(publish|data|control|view), name a-z 0-9 _ - up to 32 characters.",
+            "items": {
+              "type": "string",
+              "pattern": "^(admin|stream:[a-z0-9_-]{1,32}:(publish|data|control|view))$"
+            }
+          },
+          "expiresInSeconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 31536000,
+            "description": "Lifetime from now. Omit for a token that never expires."
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 64
+          }
+        }
+      },
+      "TokenCreated": {
+        "type": "object",
+        "required": [
+          "id",
+          "token",
+          "scopes",
+          "expiresAt",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string",
+            "description": "The secret. Shown only in this response."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expiresAt": {
+            "type": ["integer", "null"],
+            "description": "Epoch milliseconds, or null when the token never expires."
+          },
+          "label": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "TokenInfo": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "scopes",
+          "createdAt",
+          "expiresAt",
+          "revokedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": ["string", "null"]
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "createdAt": {
+            "type": "integer",
+            "description": "Epoch milliseconds."
+          },
+          "expiresAt": {
+            "type": ["integer", "null"],
+            "description": "Epoch milliseconds, or null."
+          },
+          "revokedAt": {
+            "type": ["integer", "null"],
+            "description": "Epoch milliseconds, or null while the token is live."
+          }
+        }
+      },
+      "TokenList": {
+        "type": "object",
+        "required": [
+          "tokens"
+        ],
+        "properties": {
+          "tokens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TokenInfo"
+            }
           }
         }
       },
@@ -261,6 +459,257 @@
           },
           "live": {
             "type": "boolean"
+          },
+          "probe": {
+            "description": "Last ffprobe result of the stream's input, in memory: set when the source becomes ready, cleared when it drops. Null when unknown.",
+            "type": ["object", "null"],
+            "properties": {
+              "video": {
+                "type": ["object", "null"],
+                "properties": {
+                  "codec": { "type": ["string", "null"] },
+                  "width": { "type": ["integer", "null"] },
+                  "height": { "type": ["integer", "null"] },
+                  "fps": { "type": ["number", "null"], "description": "Average frame rate, 3 decimals; null when unknown" }
+                }
+              },
+              "audio": {
+                "type": ["object", "null"],
+                "properties": {
+                  "codec": { "type": ["string", "null"] },
+                  "sampleRate": { "type": ["integer", "null"] },
+                  "channels": { "type": ["integer", "null"] }
+                }
+              }
+            }
+          }
+        }
+      },
+      "Destination": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "url",
+          "variant",
+          "enabled",
+          "startWith",
+          "hasKey"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^dst_[0-9a-f]{12}$"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9_-]{1,32}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "youtube",
+              "facebook",
+              "rtmp"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "description": "The url without user and password. A key-like last path segment is shown as [REDACTED]. The stream key is never here: see hasKey."
+          },
+          "variant": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "cc"
+            ],
+            "description": "raw: the relay stream; cc: the captioned variant (stream-cc)."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "startWith": {
+            "type": "string",
+            "enum": [
+              "stream",
+              "manual"
+            ],
+            "description": "stream: start with the relay stream when it is ready (wired by a later task); manual: only by the start route."
+          },
+          "hasKey": {
+            "type": "boolean",
+            "description": "True when a stream key is stored (encrypted with RELAY_SECRET_KEY). The key is never returned."
+          }
+        }
+      },
+      "EgressState": {
+        "type": "object",
+        "properties": {
+          "stream": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "off",
+              "starting",
+              "live",
+              "retrying",
+              "failed"
+            ],
+            "description": "live after 5 s without exit; retrying after a crash (backoff 2 s doubling to 60 s); failed when ffmpeg could not be started (no automatic retry)."
+          },
+          "pid": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastTransitionAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "restartCount": {
+            "type": "integer"
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stderrTail": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string"
+            },
+            "description": "Last ffmpeg stderr lines, redacted (keys and credentials removed)."
+          }
+        }
+      },
+      "DestinationWithState": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Destination"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "$ref": "#/components/schemas/EgressState"
+              }
+            }
+          }
+        ]
+      },
+      "DestinationCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "kind",
+          "url"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9_-]{1,32}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "youtube",
+              "facebook",
+              "rtmp"
+            ],
+            "description": "facebook needs an rtmps:// url; youtube and facebook need a key."
+          },
+          "url": {
+            "type": "string",
+            "description": "rtmp:// or rtmps:// url (up to 2048 characters). The key goes in key, never in the url."
+          },
+          "key": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "Stream key, 1 to 512 printable characters without spaces. Stored encrypted; needs RELAY_SECRET_KEY on the server."
+          },
+          "variant": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "cc"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "startWith": {
+            "type": "string",
+            "enum": [
+              "stream",
+              "manual"
+            ]
+          }
+        }
+      },
+      "DestinationPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Only the fields given change. A changed kind, url, variant or key, or enabled set to false, stops a running egress child. key null or an empty string removes the stored key.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9_-]{1,32}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "youtube",
+              "facebook",
+              "rtmp"
+            ],
+            "description": "facebook needs an rtmps:// url; youtube and facebook need a key."
+          },
+          "url": {
+            "type": "string",
+            "description": "rtmp:// or rtmps:// url (up to 2048 characters). The key goes in key, never in the url."
+          },
+          "key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 512
+          },
+          "variant": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "cc"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "startWith": {
+            "type": "string",
+            "enum": [
+              "stream",
+              "manual"
+            ]
           }
         }
       }
@@ -439,6 +888,189 @@
         "description": "Legacy route for the default stream. Use the /api/streams/{name} route instead."
       }
     },
+    "/api/assets/{assetId}": {
+      "get": {
+        "operationId": "getAsset",
+        "summary": "Serve one image asset by its id (public)",
+        "description": "Returns the stored PNG, JPEG or WebP bytes. The id is the SHA-256 of the bytes plus the extension, so the response never changes and is cached for a year.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "assetId",
+            "in": "path",
+            "required": true,
+            "description": "64 lower-case hex characters, a dot and png, jpg or webp.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}\\.(png|jpg|webp)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "public, max-age=31536000, immutable"
+                }
+              },
+              "X-Content-Type-Options": {
+                "schema": {
+                  "type": "string",
+                  "example": "nosniff"
+                }
+              }
+            },
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or malformed asset id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/assets": {
+      "post": {
+        "operationId": "uploadStreamAsset",
+        "summary": "Upload one image for a stream (content-addressed, deduplicated)",
+        "description": "Stores the image in S3 (assets/<assetId>) or in ASSET_DIR and returns its id. The Content-Type must match the bytes (image/jpeg for JPEG). Requires scope stream:<name>:data or the admin token. Identical bytes are stored once: reused is true on later uploads.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "maxLength": 10485760
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "maxLength": 10485760
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "maxLength": 10485760
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Stored (or already stored)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["assetId", "size", "reused"],
+                  "properties": {
+                    "assetId": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}\\.(png|jpg|webp)$"
+                    },
+                    "size": {
+                      "type": "integer"
+                    },
+                    "reused": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty body or invalid stream name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "The token's scopes do not allow stream:<name>:data"
+          },
+          "413": {
+            "description": "Image larger than 10 MB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Content-Type is not PNG, JPEG or WebP, or the bytes do not match it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "RELAY_API_TOKEN not set and no stored token exists"
+          }
+        }
+      }
+    },
     "/api/openapi.json": {
       "get": {
         "operationId": "getOpenApi",
@@ -602,6 +1234,138 @@
         "description": "Legacy route for the default stream. Use the /api/streams/{name} route instead."
       }
     },
+    "/api/v1/tokens": {
+      "post": {
+        "operationId": "createToken",
+        "summary": "Issue a scoped token (admin only)",
+        "description": "The token value is returned once and is not stored; only its hash is kept. Admin callers only; stream tokens cannot issue tokens. Times are milliseconds since the epoch.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Token issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks the admin scope"
+          },
+          "503": {
+            "description": "RELAY_API_TOKEN is unset and no token is stored"
+          }
+        }
+      },
+      "get": {
+        "operationId": "listTokens",
+        "summary": "List tokens (admin only)",
+        "description": "Returns every token (revoked ones too), newest first. Never includes the token value or its hash.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tokens",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks the admin scope"
+          },
+          "503": {
+            "description": "RELAY_API_TOKEN is unset and no token is stored"
+          }
+        }
+      }
+    },
+    "/api/v1/tokens/{id}": {
+      "delete": {
+        "operationId": "revokeToken",
+        "summary": "Revoke a token (admin only)",
+        "description": "Revoking an already revoked token keeps its first revocation time and still answers 204.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Token id, for example tok_0123456789ab.",
+            "schema": {
+              "type": "string",
+              "pattern": "^tok_[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks the admin scope"
+          },
+          "404": {
+            "description": "No token with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "RELAY_API_TOKEN is unset and no token is stored"
+          }
+        }
+      }
+    },
     "/api/v1/stats/session": {
       "post": {
         "operationId": "recordStreamSession",
@@ -735,6 +1499,181 @@
             }
           }
         ]
+      }
+    },
+    "/api/streams/{name}/hls/master.m3u8": {
+      "get": {
+        "operationId": "getStreamMasterPlaylist",
+        "summary": "Master playlist of one stream: delayed video plus subtitle renditions",
+        "description": "Languages come from the VIDEO_SUB_LANGS setting (default fi). Bandwidth and resolution come from VIDEO_BANDWIDTH and VIDEO_RESOLUTION.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "HLS master playlist",
+            "content": {
+              "application/vnd.apple.mpegurl": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/streams/{name}/hls/video/delayed.m3u8": {
+      "get": {
+        "operationId": "getStreamDelayedVideoPlaylist",
+        "summary": "Live video playlist of one stream, delayed by the relay",
+        "description": "Same delay and window as the audio playlist, read from the video HLS directory.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "HLS media playlist",
+            "content": {
+              "application/vnd.apple.mpegurl": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Video is not live"
+          },
+          "503": {
+            "description": "Stream timing is not available (ffmpeg needs program_date_time)"
+          }
+        }
+      }
+    },
+    "/api/streams/{name}/hls/subs/{lang}.m3u8": {
+      "get": {
+        "operationId": "getStreamSubtitlePlaylist",
+        "summary": "Subtitle media playlist of one language, one WebVTT per delayed video segment",
+        "description": "Same media sequence and durations as the delayed video playlist.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          },
+          {
+            "name": "lang",
+            "in": "path",
+            "required": true,
+            "description": "Language tag (e.g. fi, sv, zh-Hant), or original for the caption events themselves.",
+            "schema": {
+              "type": "string",
+              "pattern": "^(?:[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?|original)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "HLS media playlist",
+            "content": {
+              "application/vnd.apple.mpegurl": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid language"
+          },
+          "404": {
+            "description": "Video is not live"
+          },
+          "503": {
+            "description": "Stream timing is not available (ffmpeg needs program_date_time)"
+          }
+        }
+      }
+    },
+    "/api/streams/{name}/hls/subs/{lang}/{seq}.vtt": {
+      "get": {
+        "operationId": "getStreamSubtitleSegment",
+        "summary": "WebVTT captions of one video segment",
+        "description": "Cues overlapping the segment, relative to its start, with X-TIMESTAMP-MAP. A cue on a segment border appears in both segments.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          },
+          {
+            "name": "lang",
+            "in": "path",
+            "required": true,
+            "description": "Language tag (e.g. fi, sv, zh-Hant), or original for the caption events themselves.",
+            "schema": {
+              "type": "string",
+              "pattern": "^(?:[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?|original)$"
+            }
+          },
+          {
+            "name": "seq",
+            "in": "path",
+            "required": true,
+            "description": "Segment sequence number (the video file name without .ts).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "WebVTT segment",
+            "content": {
+              "text/vtt": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid language or sequence"
+          },
+          "404": {
+            "description": "Segment not found"
+          }
+        }
       }
     },
     "/api/streams/{name}/captions": {
@@ -885,6 +1824,75 @@
             }
           }
         ]
+      }
+    },
+    "/api/v1/streams/{name}/events": {
+      "post": {
+        "operationId": "publishStreamEvents",
+        "summary": "Push timeline events for one stream (batch)",
+        "description": "Stores caption, translation, section, graphic, marker and data events on the stream timeline. One invalid event rejects the whole batch; the 400 message names its index (events[i]). Events with a sourceKey already stored for the stream and type are counted as deduped.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
+            "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["events"],
+                "properties": {
+                  "events": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                      "type": "object",
+                      "required": ["type", "startedAt", "payload"],
+                      "properties": {
+                        "type": { "type": "string", "enum": ["caption", "translation", "section", "graphic", "marker", "data"] },
+                        "lang": { "type": "string", "description": "Required for caption and translation." },
+                        "startedAt": { "type": "integer", "description": "Epoch milliseconds, greater than 0." },
+                        "endedAt": { "type": ["integer", "null"] },
+                        "sourceKey": { "type": "string", "maxLength": 128, "description": "Dedupe key per stream and type." },
+                        "payload": { "type": "object", "description": "Depends on type; unknown fields are dropped." }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "added": { "type": "integer" },
+                    "deduped": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body; the message names the field and the event index",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "401": { "description": "Missing or wrong token" },
+          "503": { "description": "RELAY_API_TOKEN not set" }
+        }
       }
     },
     "/api/v1/streams/{name}/delay": {
@@ -1087,6 +2095,51 @@
         }
       }
     },
+    "/api/v1/streams/{name}": {
+      "get": {
+        "operationId": "getManagedStream",
+        "summary": "Get a stream's lifecycle state and last input probe",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lifecycle state and probe (probe is null until the source has been probed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "stream": {
+                      "$ref": "#/components/schemas/StreamLifecycle"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name"
+          },
+          "401": {
+            "description": "Missing or wrong token"
+          }
+        }
+      }
+    },
     "/api/v1/streams/{name}/lifecycle": {
       "get": {
         "operationId": "getManagedStreamLifecycle",
@@ -1129,6 +2182,143 @@
         }
       }
     },
+    "/api/v1/streams/{name}/captioner": {
+      "get": {
+        "operationId": "getStreamCaptioner",
+        "summary": "Read CEA-608 captioner configuration and status",
+        "description": "Scope stream:<name>:control (the admin token passes). Status is runtime-only; configuration persists per stream.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{
+          "name": "name", "in": "path", "required": true,
+          "description": "Stream name, a-z 0-9 _ - up to 32 characters.",
+          "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" }
+        }],
+        "responses": {
+          "200": { "description": "Captioner configuration and runtime status", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CaptionerResponse" } } } },
+          "401": { "description": "Missing, wrong or expired token" },
+          "403": { "description": "Token lacks stream:<name>:control" }
+        }
+      },
+      "put": {
+        "operationId": "setStreamCaptioner",
+        "summary": "Configure the CEA-608 captioner",
+        "description": "Partial updates are accepted. Enabling while the source is live starts the copy-only FFmpeg/FLV embedder; disabling stops it. holdSeconds is the wall-clock media hold, syncOffsetMs adjusts the sender/relay clock alignment.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{
+          "name": "name", "in": "path", "required": true,
+          "description": "Stream name, a-z 0-9 _ - up to 32 characters.",
+          "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" }
+        }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CaptionerConfigPatch" } } }
+        },
+        "responses": {
+          "200": { "description": "Updated configuration and runtime status", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CaptionerResponse" } } } },
+          "400": { "description": "Invalid captioner configuration" },
+          "401": { "description": "Missing, wrong or expired token" },
+          "403": { "description": "Token lacks stream:<name>:control" }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/config": {
+      "get": {
+        "operationId": "getStreamConfig",
+        "summary": "Read the per-stream config",
+        "description": "Stored fields over the defaults. Scope stream:<name>:control (the admin token passes).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
+            "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Config",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StreamConfigResponse" } } }
+          },
+          "401": { "description": "Missing, wrong or expired token" },
+          "403": { "description": "Token lacks stream:<name>:control" }
+        }
+      },
+      "put": {
+        "operationId": "setStreamConfig",
+        "summary": "Set part of the per-stream config",
+        "description": "Only the fields sent are changed. Unknown fields are refused (400). visibleLanguages: [\"*\"] (default, every language) or 1 to 10 language tags; the translations viewers get and the language shown under the original (composedText) follow it. radio: the MediaMTX ready hook starts the radio pull (RADIO_ON_READY=off still wins). publicGraphics: false keeps graphic events from viewers. videoHls and recordOnLive are stored for later phases and have no effect yet. viewerKey: null, or 8-64 characters a-z 0-9 _ -; the viewer then opens at /api/v1/viewer/{viewerKey} and the stream name no longer opens it. A viewerKey used by another stream answers 409.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
+            "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/StreamConfigPatch" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Config after the change",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StreamConfigResponse" } } }
+          },
+          "400": {
+            "description": "Invalid field or value (the message names it)",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "401": { "description": "Missing, wrong or expired token" },
+          "403": { "description": "Token lacks stream:<name>:control" },
+          "409": {
+            "description": "viewerKey is already used by another stream",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+    "/api/v1/viewer/{key}": {
+      "get": {
+        "operationId": "streamViewerEvents",
+        "summary": "LCYT-compatible viewer stream (SSE), public",
+        "description": "Server-Sent Events for viewer pages and the LCYT Android TV app. Public: no token, CORS Access-Control-Allow-Origin *, public rate limit. The key is the stream's viewerKey when it has one (PUT /api/v1/streams/{name}/config), else the stream name (404 once the stream has a viewerKey). Viewers get only the stream's visibleLanguages; graphic events are left out when publicGraphics is false. Events: connected { ok, stream, mode }; caption { text, composedText, translations, codes, sequence, timestamp } (timestamp is ISO without Z; a translation re-sends its caption with the same sequence and translations filled); section { id, timestamp, title, kind?, index? }; graphic { id, timestamp, kind, title?, text?, assetId?, hymnNumber?, verse?, lines? }. On connect the current section, graphic and caption are sent once. A comment line is sent every 25 s.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "description": "Viewer key: the stream's viewerKey (8-64 characters a-z 0-9 _ -), or a stream name (up to 32 characters) while the stream has no viewerKey.",
+            "schema": { "type": "string", "pattern": "^[a-z0-9_-]{1,64}$" }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "description": "live (default): events are sent when stored. delayed: events are released at startedAt plus the stream's listener delay.",
+            "schema": { "type": "string", "enum": ["live", "delayed"], "default": "live" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event stream (text/event-stream)",
+            "content": { "text/event-stream": { "schema": { "type": "string" } } }
+          },
+          "400": {
+            "description": "Invalid key or mode",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
     "/api/v1/captions/source": {
       "get": {
         "operationId": "getCaptionSource",
@@ -1156,7 +2346,16 @@
                         "rejected": { "type": "integer" },
                         "deduped": { "type": "integer" },
                         "reconnects": { "type": "integer" },
-                        "lastError": { "type": ["string", "null"] }
+                        "lastError": { "type": ["string", "null"] },
+                        "mapper": {
+                          "type": ["object", "null"],
+                          "description": "Counts of the gateway event mapper (rundown, translation, graphic): mapped, rejected, unknown",
+                          "properties": {
+                            "mapped": { "type": "integer" },
+                            "rejected": { "type": "integer" },
+                            "unknown": { "type": "integer" }
+                          }
+                        }
                       }
                     }
                   }
@@ -1199,6 +2398,1090 @@
           },
           "401": {
             "description": "Missing or wrong token"
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/destinations": {
+      "get": {
+        "operationId": "listDestinations",
+        "summary": "List a stream's egress destinations with their state",
+        "description": "Needs stream:<name>:control (admin passes). Each destination carries its egress state. The stream key is never returned.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Destinations of the stream, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "stream": {
+                      "type": "string"
+                    },
+                    "destinations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DestinationWithState"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name or body (the message names the field)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "503": {
+            "description": "RELAY_API_TOKEN is unset and no token is stored"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createDestination",
+        "summary": "Add an egress destination to a stream",
+        "description": "Creates the stream row when needed. Answers 409 when the stream already has MAX_DESTINATIONS_PER_STREAM destinations (default 6) or the name is taken, and 503 when a key is given but RELAY_SECRET_KEY is not set.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DestinationCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "destination": {
+                      "$ref": "#/components/schemas/DestinationWithState"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name or body (the message names the field)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "409": {
+            "description": "Limit reached or name already used on this stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "RELAY_SECRET_KEY is not set or invalid while a key is given",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/destinations/{id}": {
+      "patch": {
+        "operationId": "updateDestination",
+        "summary": "Change an egress destination",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Destination id, for example dst_0123456789ab.",
+            "schema": {
+              "type": "string",
+              "pattern": "^dst_[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DestinationPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "destination": {
+                      "$ref": "#/components/schemas/DestinationWithState"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name or body (the message names the field)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "404": {
+            "description": "No destination with that id on this stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name already used on this stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "RELAY_SECRET_KEY is not set or invalid while a key is given",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteDestination",
+        "summary": "Remove an egress destination",
+        "description": "Stops its egress child first.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Destination id, for example dst_0123456789ab.",
+            "schema": {
+              "type": "string",
+              "pattern": "^dst_[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "400": {
+            "description": "Invalid stream name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "404": {
+            "description": "No destination with that id on this stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/destinations/{id}/start": {
+      "post": {
+        "operationId": "startDestination",
+        "summary": "Start the egress child of one destination",
+        "description": "Idempotent while running. Pulls the relay stream (raw or cc) and pushes it with stream copy to the destination (no re-encoding). The key is read from storage here and never returned.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Destination id, for example dst_0123456789ab.",
+            "schema": {
+              "type": "string",
+              "pattern": "^dst_[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Egress state of the destination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "$ref": "#/components/schemas/EgressState"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name or body (the message names the field)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "404": {
+            "description": "No destination with that id on this stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Destination is disabled, or a YouTube or Facebook destination has no stream key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "RELAY_SECRET_KEY is not set or cannot read the stored key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/destinations/{id}/stop": {
+      "post": {
+        "operationId": "stopDestination",
+        "summary": "Stop the egress child of one destination",
+        "description": "Cancels a pending retry and sends SIGTERM (SIGKILL after a grace period).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Destination id, for example dst_0123456789ab.",
+            "schema": {
+              "type": "string",
+              "pattern": "^dst_[0-9a-f]{12}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Egress state of the destination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "$ref": "#/components/schemas/EgressState"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "404": {
+            "description": "No destination with that id on this stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/recordings": {
+      "post": {
+        "operationId": "startRecording",
+        "summary": "Start recording a stream to S3",
+        "description": "Needs stream:<name>:control (admin passes). Starts a copy-only recorder that writes 60 s segments to the local spool; an uploader moves each closed segment to S3 under recordings/<stream>/<sessionId>/. Needs S3_ENDPOINT and S3_BUCKET (503 otherwise). A running recording is returned as it is.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The recording session (state recording)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "recording": {
+                      "type": "object",
+                      "properties": {
+                        "stream": {
+                          "type": "string"
+                        },
+                        "sessionId": {
+                          "type": "string",
+                          "description": "Sortable id: UTC time to the millisecond plus 8 random hex characters."
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "recording",
+                            "degraded",
+                            "failed",
+                            "stopping",
+                            "stopped",
+                            "interrupted"
+                          ],
+                          "description": "degraded: spool over RECORDING_SPOOL_MAX_BYTES, recording goes on. stopping: uploads still retried, session.json not yet written."
+                        },
+                        "startedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "endedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        },
+                        "spoolBytes": {
+                          "type": "integer"
+                        },
+                        "segmentsUploaded": {
+                          "type": "integer"
+                        },
+                        "recorder": {
+                          "type": "string",
+                          "enum": [
+                            "running",
+                            "retrying",
+                            "failed",
+                            "stopped"
+                          ]
+                        },
+                        "restartCount": {
+                          "type": "integer"
+                        },
+                        "lastError": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "uploadError": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "The last S3 failure while uploading (HTTP status and S3 code only)."
+                        },
+                        "stderrTail": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "409": {
+            "description": "The previous recording of this stream is still uploading",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "S3 is not configured, or the relay is shutting down",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listRecordings",
+        "summary": "List the recordings of a stream",
+        "description": "Needs stream:<name>:control (admin passes). Newest first, from the database. manifest is the session.json of a stopped recording.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recordings of the stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "stream": {
+                      "type": "string"
+                    },
+                    "recordings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "sessionId": {
+                            "type": "string"
+                          },
+                          "stream": {
+                            "type": "string"
+                          },
+                          "startedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "endedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time"
+                          },
+                          "state": {
+                            "type": "string"
+                          },
+                          "manifest": {
+                            "type": [
+                              "object",
+                              "null"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/recordings/{sessionId}/handoff": {
+      "get": {
+        "operationId": "getRecordingHandoff",
+        "summary": "Handoff manifest of a stopped recording for Saarnavideo",
+        "description": "Needs stream:<name>:control (admin passes). Builds an LCYT handoff manifest v1 (the contract Saarnavideo's POST /api/imports/lcyt validates) from a stopped recording: one `clean` feed whose parts are the uploaded segments, one VTT per caption language, section events as `cue` markers, marker events as `marker` markers and `data` events as variables. Every ref is a fresh presigned GET URL valid for HANDOFF_URL_TTL_SECONDS (default 86400). The manifest carries no credentials other than those query signatures. The same manifest, with the URLs of the stop time, is stored as handoff.json beside session.json.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          },
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Handoff manifest v1",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "version",
+                    "origin",
+                    "title",
+                    "feeds"
+                  ],
+                  "properties": {
+                    "version": {
+                      "type": "integer",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "origin": {
+                      "type": "object",
+                      "properties": {
+                        "system": {
+                          "type": "string",
+                          "enum": [
+                            "lcyt"
+                          ]
+                        },
+                        "instance": {
+                          "type": "string"
+                        },
+                        "groupId": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "endedAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time"
+                    },
+                    "timeAlignment": {
+                      "type": "string"
+                    },
+                    "feeds": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "role": {
+                            "type": "string",
+                            "enum": [
+                              "clean"
+                            ]
+                          },
+                          "durationMs": {
+                            "type": "number"
+                          },
+                          "parts": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "ref": {
+                                  "type": "string",
+                                  "format": "uri"
+                                },
+                                "startMs": {
+                                  "type": "number"
+                                },
+                                "durationMs": {
+                                  "type": "number"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "captions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "language": {
+                            "type": "string"
+                          },
+                          "format": {
+                            "type": "string"
+                          },
+                          "ref": {
+                            "type": "string",
+                            "format": "uri"
+                          },
+                          "origin": {
+                            "type": "string"
+                          },
+                          "alignedTo": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "markers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "atMs": {
+                            "type": "number"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "variables": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": [
+                          "string",
+                          "number"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name or session id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "404": {
+            "description": "No such recording",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The recording is not stopped and finalized yet, or has no segments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "S3 is not configured or cannot presign",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/recordings/current": {
+      "delete": {
+        "operationId": "stopRecording",
+        "summary": "Stop the recording of a stream",
+        "description": "Needs stream:<name>:control (admin passes). Stops the recorder, uploads the remaining segments (the last one too), then writes the sidecars and session.json once. If S3 fails, the answer is state stopping and the uploads are retried in the background until session.json is written.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The session (state stopped, or stopping while uploads are retried)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "recording": {
+                      "type": "object",
+                      "properties": {
+                        "stream": {
+                          "type": "string"
+                        },
+                        "sessionId": {
+                          "type": "string",
+                          "description": "Sortable id: UTC time to the millisecond plus 8 random hex characters."
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "recording",
+                            "degraded",
+                            "failed",
+                            "stopping",
+                            "stopped",
+                            "interrupted"
+                          ],
+                          "description": "degraded: spool over RECORDING_SPOOL_MAX_BYTES, recording goes on. stopping: uploads still retried, session.json not yet written."
+                        },
+                        "startedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "endedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        },
+                        "spoolBytes": {
+                          "type": "integer"
+                        },
+                        "segmentsUploaded": {
+                          "type": "integer"
+                        },
+                        "recorder": {
+                          "type": "string",
+                          "enum": [
+                            "running",
+                            "retrying",
+                            "failed",
+                            "stopped"
+                          ]
+                        },
+                        "restartCount": {
+                          "type": "integer"
+                        },
+                        "lastError": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "uploadError": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "The last S3 failure while uploading (HTTP status and S3 code only)."
+                        },
+                        "stderrTail": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stream name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
+          "404": {
+            "description": "No recording for this stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }

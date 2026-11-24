@@ -1,6 +1,6 @@
 /**
  * Generates src/operations.generated.js from the server's OpenAPI document.
- * Run after changing server/openapi.json: `npm run generate`.
+ * Run after changing server/openapi.json: `pnpm run generate`.
  */
 import fs from 'node:fs';
 import path from 'node:path';

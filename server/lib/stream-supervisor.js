@@ -2,10 +2,12 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isValidStreamName } from './streams.js';
+import { redact } from './redact.js';
 
+// Unparsable input is never echoed: it may still hold a secret.
 const redactUrl = (value) => {
-  try { const u = new URL(value); if (u.username) u.username = 'REDACTED'; if (u.password) u.password = 'REDACTED'; return u.toString(); }
-  catch { return '[invalid source URL]'; }
+  try { new URL(value); } catch { return '[invalid source URL]'; }
+  return redact(String(value));
 };
 
 export class StreamSupervisor {
@@ -44,7 +46,7 @@ export class StreamSupervisor {
     const log = fs.createWriteStream(path.join(this.logDir,`ffmpeg_${stamp}_${e.name}.log`), { flags:'a' });
     // Input URL comes only from deployment configuration, never from request bodies.
     const child = this.spawnProcess('ffmpeg', ['-nostdin','-hide_banner','-loglevel','warning','-i',source,'-vn','-c:a','aac','-b:a',process.env.AUDIO_BITRATE || '128k','-f','hls','-hls_time',process.env.HLS_TIME || '4','-hls_list_size',String(Math.max(10,Math.ceil(Number(process.env.DELAY_MAX_SECONDS || 60)/4)+6)),'-hls_flags','delete_segments+append_list+program_date_time','-hls_segment_filename',path.join(this.hlsDir,e.name,'seg%05d.ts'),path.join(this.hlsDir,e.name,'stream.m3u8'),'-vn','-c:a','libmp3lame','-b:a',process.env.AUDIO_BITRATE || '128k','-id3v2_version','3','-metadata',`title=${e.name}`,'-metadata',`date=${stamp}`,archive], { stdio:['ignore','ignore','pipe'] });
-    e.child = child; e.startedAt = new Date().toISOString(); e.lastTransitionAt = e.startedAt; e.state = 'starting';
+    e.child = child; e.log = log; e.startedAt = new Date().toISOString(); e.lastTransitionAt = e.startedAt; e.state = 'starting';
     child.stderr?.pipe(log);
     child.once('spawn', () => { if(e.generation === generation && e.desiredState === 'running') { e.state='running'; e.lastTransitionAt=new Date().toISOString(); this.onSession(e.name,'start',e.startedAt); } });
     child.once('error', (err) => { log.end(); if(e.generation !== generation) return; e.lastError = 'FFmpeg failed to start'; e.state='failed'; e.lastTransitionAt=new Date().toISOString(); e.child=null; this.#retry(e,generation); });
@@ -68,8 +70,8 @@ export class StreamSupervisor {
     if(e.stopping) return e.stopping;
     e.desiredState='stopped'; e.state='stopping'; e.lastTransitionAt=new Date().toISOString(); e.generation++;
     if(e.retryTimer) clearTimeout(e.retryTimer); e.retryTimer=null;
-    const child=e.child;
-    e.stopping=(async()=>{ child.kill('SIGTERM'); await new Promise((resolve)=>{ let done=false; const finish=()=>{if(done)return;done=true;clearTimeout(timer);resolve();}; child.once('close',finish); const timer=setTimeout(()=>{if(child.exitCode===null && child.signalCode===null)child.kill('SIGKILL'); finish();},this.stopGraceMs); timer.unref?.(); }); e.child=null;e.state='stopped';e.lastTransitionAt=new Date().toISOString();this.onSession(e.name,'end',e.lastTransitionAt);e.stopping=null; return this.state(name); })();
+    const child=e.child; const log=e.log;
+    e.stopping=(async()=>{ child.kill('SIGTERM'); await new Promise((resolve)=>{ let done=false; const finish=()=>{if(done)return;done=true;clearTimeout(timer);resolve();}; child.once('close',finish); const timer=setTimeout(()=>{if(child.exitCode===null && child.signalCode===null)child.kill('SIGKILL'); finish();},this.stopGraceMs); timer.unref?.(); }); if(log && !log.closed) await new Promise((resolve)=>{ log.once('close',resolve); log.end(); }); e.child=null;e.state='stopped';e.lastTransitionAt=new Date().toISOString();this.onSession(e.name,'end',e.lastTransitionAt);e.stopping=null; return this.state(name); })();
     return e.stopping;
   }
   async close() { this.closing=true; await Promise.all([...this.entries.keys()].map((n)=>this.stop(n))); }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { GatewayCaptions, SseParser } from '../lib/gateway-captions.js';
 import { StreamRegistry } from '../lib/streams.js';
+import { createGatewayMapper } from '../lib/gateway-map.js';
 
 const registry = () => new StreamRegistry({ defaultDelaySeconds: 0, maxDelaySeconds: 60 });
 
@@ -81,7 +82,7 @@ test('maps transcripts to captions, sends auth headers, ignores unknown events',
   assert.equal(c.text, 'caption 1');
   assert.equal(typeof c.startedAt, 'number');
   assert.ok(c.endedAt >= c.startedAt);
-  assert.equal(gw.requests[0].url, '/api/v1/events?types=transcript');
+  assert.equal(gw.requests[0].url, '/api/v1/events?types=transcript,rundown,translation,graphic');
   assert.equal(gw.requests[0].headers.authorization, 'Bearer sekret');
   assert.equal(gw.requests[0].headers.accept, 'text/event-stream');
   assert.equal(gw.requests[0].headers['last-event-id'], undefined);
@@ -209,4 +210,43 @@ test('unconfigured client is inert', async () => {
   client.start();
   assert.equal(client.status().configured, false);
   await client.stop();
+});
+
+test('final transcripts are also stored as caption events keyed by epoch:seq', () => {
+  const stored = [];
+  const streams = registry();
+  const client = new GatewayCaptions({
+    baseUrl: 'http://127.0.0.1:1', stream: 'messu', streams,
+    storeEvents: (stream, events) => { stored.push({ stream, events }); return { added: events.length, deduped: 0 }; },
+  });
+  const now = Date.now();
+  client.onEvent({ event: 'transcript', id: 'e:4', data: JSON.stringify({ epoch: 'e', seq: 4, language: 'fi', text: 'Hyvää huomenta', startedAt: now - 2000, endedAt: now - 1000 }) });
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].stream, 'messu');
+  const [ev] = stored[0].events;
+  assert.equal(ev.type, 'caption');
+  assert.equal(ev.lang, 'fi');
+  assert.equal(ev.sourceKey, 'e:4');
+  assert.deepEqual(ev.payload, { text: 'Hyvää huomenta', final: true });
+  assert.equal(client.status().received, 1);
+  // A replay of the same seq is deduplicated before anything is stored
+  client.onEvent({ event: 'transcript', id: 'e:4', data: JSON.stringify({ epoch: 'e', seq: 4, language: 'fi', text: 'Hyvää huomenta', startedAt: now - 2000 }) });
+  assert.equal(stored.length, 1);
+});
+
+test('rundown and graphic events go through the mapper and storeEvents; the caption buffer is untouched', () => {
+  const stored = [];
+  const streams = registry();
+  const client = new GatewayCaptions({
+    baseUrl: 'http://127.0.0.1:1', stream: 'messu', streams,
+    mapper: createGatewayMapper(),
+    storeEvents: (stream, events) => { stored.push(...events); return { added: events.length, deduped: 0 }; },
+  });
+  client.onEvent({ event: 'rundown', data: JSON.stringify({ currentItem: { id: 'r1', index: 0, title: 'Virsi' } }) });
+  client.onEvent({ event: 'graphic', data: JSON.stringify({ type: 'graphic', payload: { kind: 'text', text: 'Rauha' } }) });
+  client.onEvent({ event: 'graphic', data: JSON.stringify({ type: 'graphic', payload: { kind: 'bogus' } }) });
+  assert.deepEqual(stored.map((e) => e.type), ['section', 'graphic']);
+  assert.equal(client.status().mapper.rejected, 1);
+  assert.equal(client.status().received, 0);
+  assert.equal(streams.peek('messu')?.captions.items.length ?? 0, 0);
 });

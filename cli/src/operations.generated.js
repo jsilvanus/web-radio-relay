@@ -71,6 +71,36 @@ export const operations = [
     ]
   },
   {
+    "operationId": "getAsset",
+    "method": "GET",
+    "path": "/api/assets/{assetId}",
+    "summary": "Serve one image asset by its id (public)",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "assetId",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "uploadStreamAsset",
+    "method": "POST",
+    "path": "/api/v1/streams/{name}/assets",
+    "summary": "Upload one image for a stream (content-addressed, deduplicated)",
+    "bearer": true,
+    "body": "image/png",
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
     "operationId": "getOpenApi",
     "method": "GET",
     "path": "/api/openapi.json",
@@ -105,6 +135,39 @@ export const operations = [
     "bearer": true,
     "body": "application/json",
     "parameters": []
+  },
+  {
+    "operationId": "listTokens",
+    "method": "GET",
+    "path": "/api/v1/tokens",
+    "summary": "List tokens (admin only)",
+    "bearer": true,
+    "body": null,
+    "parameters": []
+  },
+  {
+    "operationId": "createToken",
+    "method": "POST",
+    "path": "/api/v1/tokens",
+    "summary": "Issue a scoped token (admin only)",
+    "bearer": true,
+    "body": "application/json",
+    "parameters": []
+  },
+  {
+    "operationId": "revokeToken",
+    "method": "DELETE",
+    "path": "/api/v1/tokens/{id}",
+    "summary": "Revoke a token (admin only)",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true
+      }
+    ]
   },
   {
     "operationId": "recordStreamSession",
@@ -155,6 +218,81 @@ export const operations = [
     ]
   },
   {
+    "operationId": "getStreamMasterPlaylist",
+    "method": "GET",
+    "path": "/api/streams/{name}/hls/master.m3u8",
+    "summary": "Master playlist of one stream: delayed video plus subtitle renditions",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "getStreamDelayedVideoPlaylist",
+    "method": "GET",
+    "path": "/api/streams/{name}/hls/video/delayed.m3u8",
+    "summary": "Live video playlist of one stream, delayed by the relay",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "getStreamSubtitlePlaylist",
+    "method": "GET",
+    "path": "/api/streams/{name}/hls/subs/{lang}.m3u8",
+    "summary": "Subtitle media playlist of one language, one WebVTT per delayed video segment",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "lang",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "getStreamSubtitleSegment",
+    "method": "GET",
+    "path": "/api/streams/{name}/hls/subs/{lang}/{seq}.vtt",
+    "summary": "WebVTT captions of one video segment",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "lang",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "seq",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
     "operationId": "listStreamCaptions",
     "method": "GET",
     "path": "/api/streams/{name}/captions",
@@ -189,6 +327,21 @@ export const operations = [
     "method": "POST",
     "path": "/api/v1/streams/{name}/captions",
     "summary": "Push timed captions for one stream",
+    "bearer": true,
+    "body": "application/json",
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "publishStreamEvents",
+    "method": "POST",
+    "path": "/api/v1/streams/{name}/events",
+    "summary": "Push timeline events for one stream (batch)",
     "bearer": true,
     "body": "application/json",
     "parameters": [
@@ -260,6 +413,21 @@ export const operations = [
     ]
   },
   {
+    "operationId": "getManagedStream",
+    "method": "GET",
+    "path": "/api/v1/streams/{name}",
+    "summary": "Get a stream's lifecycle state and last input probe",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
     "operationId": "getManagedStreamLifecycle",
     "method": "GET",
     "path": "/api/v1/streams/{name}/lifecycle",
@@ -271,6 +439,86 @@ export const operations = [
         "name": "name",
         "in": "path",
         "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "getStreamCaptioner",
+    "method": "GET",
+    "path": "/api/v1/streams/{name}/captioner",
+    "summary": "Read CEA-608 captioner configuration and status",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "setStreamCaptioner",
+    "method": "PUT",
+    "path": "/api/v1/streams/{name}/captioner",
+    "summary": "Configure the CEA-608 captioner",
+    "bearer": true,
+    "body": "application/json",
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "getStreamConfig",
+    "method": "GET",
+    "path": "/api/v1/streams/{name}/config",
+    "summary": "Read the per-stream config",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "setStreamConfig",
+    "method": "PUT",
+    "path": "/api/v1/streams/{name}/config",
+    "summary": "Set part of the per-stream config",
+    "bearer": true,
+    "body": "application/json",
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "streamViewerEvents",
+    "method": "GET",
+    "path": "/api/v1/viewer/{key}",
+    "summary": "LCYT-compatible viewer stream (SSE), public",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "key",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "mode",
+        "in": "query",
+        "required": false
       }
     ]
   },
@@ -291,5 +539,180 @@ export const operations = [
     "bearer": true,
     "body": null,
     "parameters": []
+  },
+  {
+    "operationId": "listDestinations",
+    "method": "GET",
+    "path": "/api/v1/streams/{name}/destinations",
+    "summary": "List a stream's egress destinations with their state",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "createDestination",
+    "method": "POST",
+    "path": "/api/v1/streams/{name}/destinations",
+    "summary": "Add an egress destination to a stream",
+    "bearer": true,
+    "body": "application/json",
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "deleteDestination",
+    "method": "DELETE",
+    "path": "/api/v1/streams/{name}/destinations/{id}",
+    "summary": "Remove an egress destination",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "id",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "updateDestination",
+    "method": "PATCH",
+    "path": "/api/v1/streams/{name}/destinations/{id}",
+    "summary": "Change an egress destination",
+    "bearer": true,
+    "body": "application/json",
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "id",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "startDestination",
+    "method": "POST",
+    "path": "/api/v1/streams/{name}/destinations/{id}/start",
+    "summary": "Start the egress child of one destination",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "id",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "stopDestination",
+    "method": "POST",
+    "path": "/api/v1/streams/{name}/destinations/{id}/stop",
+    "summary": "Stop the egress child of one destination",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "id",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "listRecordings",
+    "method": "GET",
+    "path": "/api/v1/streams/{name}/recordings",
+    "summary": "List the recordings of a stream",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "startRecording",
+    "method": "POST",
+    "path": "/api/v1/streams/{name}/recordings",
+    "summary": "Start recording a stream to S3",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "getRecordingHandoff",
+    "method": "GET",
+    "path": "/api/v1/streams/{name}/recordings/{sessionId}/handoff",
+    "summary": "Handoff manifest of a stopped recording for Saarnavideo",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      },
+      {
+        "name": "sessionId",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "stopRecording",
+    "method": "DELETE",
+    "path": "/api/v1/streams/{name}/recordings/current",
+    "summary": "Stop the recording of a stream",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
   }
 ];

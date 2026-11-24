@@ -12,8 +12,9 @@ services:
       RELAY_API_TOKEN: "${RELAY_API_TOKEN}"
       DELAY_MAX_SECONDS: "${DELAY_MAX_SECONDS:-60}"
     ports:
-      # RTMP ingest is not HTTP, so Traefik cannot carry it. Bind to the VPS
-      # address you want publishers to reach; restrict with the host firewall.
+      # nginx-rtmp stays the RTMP ingest until the MediaMTX switch (plan S1).
+      # RTMP is not HTTP, so Traefik cannot carry it. Bind to the VPS address
+      # you want publishers to reach; restrict with the host firewall.
       - "${RTMP_BIND:-0.0.0.0}:${RTMP_PORT:-1935}:1935"
     volumes:
       - radio-hls:/var/www/radio/hls
@@ -39,6 +40,49 @@ services:
       - default
       - traefik-public
 
+  # ---------------------------------------------------------------------------
+  # mediamtx — RTMP ingest (publish auth + ready hooks call the api)
+  # Off unless COMPOSE_PROFILES=mediamtx (set by the deploy workflow from the
+  # MEDIAMTX variable), so merging this file does not change the live ingest.
+  # Config: mediamtx.yml next to this file (the deploy workflow copies it).
+  # Upstream image, pinned; the -ffmpeg variant has the shell and wget the hooks need.
+  # RTSP 8554 and the API 9997 are on the internal network only, not published.
+  # ---------------------------------------------------------------------------
+  mediamtx:
+    image: bluenviron/mediamtx:1.15.1-ffmpeg
+    container_name: web-radio-relay-mediamtx
+    profiles: ["mediamtx"]
+    restart: unless-stopped
+    mem_limit: ${MEDIAMTX_MEM_LIMIT:-128m}
+    command: ["/mediamtx.yml"]
+    ports:
+      # RTMP is not HTTP, so Traefik cannot carry it. Bind to the address you want
+      # publishers to reach (loopback by default, for a tunnel); restrict with the host firewall.
+      # While nginx-rtmp still holds RTMP_PORT, MediaMTX listens on its own port
+      # (loopback by default). At the switch, move RTMP_PORT here and drop nginx's.
+      - "${MEDIAMTX_RTMP_BIND:-127.0.0.1}:${MEDIAMTX_RTMP_PORT:-1936}:1935"
+      # RTMPS and SRT: off unless the deploy variables RTMPS_ENABLED / SRT_ENABLED are on,
+      # which the deploy workflow turns into MTX_RTMPENCRYPTION=optional / MTX_SRT=yes in .env.
+      # The ports are bound to loopback by default; open them in the host firewall only when used.
+      - "${RTMPS_BIND:-127.0.0.1}:${RTMPS_PORT:-1937}:1937"   # RTMPS (TLS)
+      - "${SRT_BIND:-127.0.0.1}:${SRT_PORT:-8890}:8890/udp"   # SRT (UDP)
+    environment:
+      HOOK_SECRET: "${HOOK_SECRET}"
+      # Overrides authHTTPAddress in mediamtx.yml so the secret comes from the env.
+      MTX_AUTHHTTPADDRESS: "http://api:3000/internal/mediamtx/auth?secret=${HOOK_SECRET}"
+      MTX_RTMPENCRYPTION: "${MTX_RTMPENCRYPTION:-no}"
+      MTX_SRT: "${MTX_SRT:-no}"
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+      # RTMPS certificate and key, read as /certs/rtmps.crt and /certs/rtmps.key (see the README section "Publishing from a phone").
+      - "${RTMPS_CERT_DIR:-./certs}:/certs:ro"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - default
+      - traefik-public
+
   api:
     image: ghcr.io/${IMAGE_REPO:-jsilvanus}/web-radio-relay-api:${IMAGE_TAG:-latest}
     container_name: web-radio-relay-api
@@ -56,6 +100,7 @@ services:
       HIDDEN_ARCHIVE_DELETE_DAYS: "${HIDDEN_ARCHIVE_DELETE_DAYS:-0}"
       STATS_SESSION_DAYS: "${STATS_SESSION_DAYS:-90}"
       RELAY_API_TOKEN: "${RELAY_API_TOKEN}"
+      PUBLISH_AUTH: "${PUBLISH_AUTH:-off}"
       METRICS_BEARER_TOKEN: "${METRICS_BEARER_TOKEN}"
       DELAY_SECONDS: "${DELAY_SECONDS:-0}"
       DELAY_MAX_SECONDS: "${DELAY_MAX_SECONDS:-60}"
@@ -64,11 +109,14 @@ services:
       GATEWAY_EVENTS_URL: "${GATEWAY_EVENTS_URL:-}"
       GATEWAY_TOKEN: "${GATEWAY_TOKEN:-}"
       GATEWAY_CAPTION_STREAM: "${GATEWAY_CAPTION_STREAM:-}"
+      HOOK_SECRET: "${HOOK_SECRET}"
+      RADIO_SOURCE_URL_TEMPLATE: "${RADIO_SOURCE_URL_TEMPLATE:-}"
     volumes:
       - radio-hls:/var/www/radio/hls:ro
       - radio-archive:/var/www/radio/archive
       - radio-hidden-archive:/var/www/radio/hidden_archive
       - radio-stats:/var/www/radio/stats
+      - relay-data:/var/lib/relay
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/api/health', (r) => process.exit(r.statusCode===200?0:1)).on('error', () => process.exit(1))"]
       interval: 30s
@@ -86,6 +134,7 @@ volumes:
   radio-hidden-archive:
   radio-logs:
   radio-stats:
+  relay-data:
 
 networks:
   traefik-public:

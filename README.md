@@ -15,11 +15,12 @@ Web radio relay: audio, captions and translations for browsers, with a listener 
 3. [Setup — Docker (recommended)](#setup--docker-recommended)
 4. [Setup — Bare metal / development server](#setup--bare-metal--development-server)
 5. [Running the Vite dev site](#running-the-vite-dev-site)
-6. [Environment variables](#environment-variables)
-7. [API reference](#api-reference)
-8. [Embeddable widget](#embeddable-widget)
-9. [Integration with a YouTube fan-out project](#integration-with-a-youtube-fan-out-project)
-10. [Troubleshooting](#troubleshooting)
+6. [Publishing from a phone](#publishing-from-a-phone)
+7. [Environment variables](#environment-variables)
+8. [API reference](#api-reference)
+9. [Embeddable widget](#embeddable-widget)
+10. [Integration with a YouTube fan-out project](#integration-with-a-youtube-fan-out-project)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -208,7 +209,7 @@ Install the following on your server / dev machine:
 | **Nginx** (with `nginx-rtmp-module`) | 1.24 | See below |
 | **FFmpeg** (with `libmp3lame`, `aac`) | 4.4 | See below |
 | **Node.js** | 18 | [nodejs.org](https://nodejs.org/) |
-| **npm** | 9 | Bundled with Node.js |
+| **pnpm** | 10 | `corepack enable` (the version is pinned in the root `package.json`) |
 
 #### Install Nginx with RTMP module
 
@@ -299,13 +300,16 @@ LOG_DIR=/home/me/radio/logs
 
 ### 3 · Install and start the API server
 
-```bash
-cd server
-npm install
+The repo is a pnpm workspace (`server`, `cli`, `dev`). Install once from the root:
 
+```bash
+corepack enable
+pnpm install            # from the repo root
+
+cd server
 # Load env vars from .env, then start
 export $(grep -v '^#' ../.env | xargs)
-npm start
+pnpm start
 # API is now listening on port 3000 (or the PORT you set in .env)
 ```
 
@@ -413,9 +417,8 @@ so the API server and nginx must be running first (either via Docker or bare met
 ### Start
 
 ```bash
-cd dev
-npm install
-npm run dev
+cd dev          # after the root `pnpm install`
+pnpm run dev
 # → http://localhost:5173
 ```
 
@@ -425,7 +428,7 @@ Open `http://localhost:5173` in your browser.
 
 ```bash
 cd dev
-npm run build
+pnpm run build
 # Output is in dev/dist/ — web-radio-relay.js is copied there automatically
 ```
 
@@ -433,7 +436,7 @@ npm run build
 
 ## Managed stream lifecycle API
 
-The API container owns FFmpeg for streams started through the authenticated lifecycle API. Configure `RELAY_API_TOKEN` and `RADIO_SOURCE_URL_TEMPLATE` in `.env`; the template uses `{name}`, for example `rtsp://mediamtx:8554/{name}`. The source URL is deployment configuration and is never accepted in request bodies.
+The API container owns FFmpeg for streams started through the authenticated lifecycle API. Configure `RELAY_API_TOKEN` and `RADIO_SOURCE_URL_TEMPLATE` in `.env`; the template uses `{name}`, for example `rtsp://mediamtx:8554/live/{name}` (the MediaMTX path, see [MediaMTX](#mediamtx)). The source URL is deployment configuration and is never accepted in request bodies.
 
 - `POST /api/v1/streams/{name}/start`
 - `POST /api/v1/streams/{name}/stop`
@@ -444,6 +447,84 @@ Send `Authorization: Bearer <RELAY_API_TOKEN>`. Start and stop are idempotent. L
 
 Legacy RTMP publisher callbacks remain supported separately. Do not publish and API-manage the same stream name at once: both paths can otherwise attempt to write the same HLS/archive outputs. The RTSP pull lifecycle is configured independently of RTMP ingest.
 
+## MediaMTX
+
+RTMP ingest runs in [MediaMTX](https://github.com/bluenviron/mediamtx) (`bluenviron/mediamtx:1.15.1-ffmpeg`, service `mediamtx`, config `mediamtx/mediamtx.yml`). It accepts `live/<name>` publishers (`<name>` is 1 to 32 characters of a-z, 0-9, `_`, `-`, with an optional `-cc` suffix for the captioned copy), asks the API whether each publish may start, and tells the API when a stream becomes ready or drops, so the API can start or stop the radio pull.
+
+- **Publish auth:** MediaMTX calls `POST /internal/mediamtx/auth` for every publish and read, with the `secret` query parameter set to `HOOK_SECRET` (see [Internal hooks](#internal-hooks)).
+- **Ready hooks:** `runOnReady` and `runOnNotReady` call `/internal/mediamtx/ready` and `/internal/mediamtx/notready` with the `path` query and the secret in an `x-hook-secret` header (from `HOOK_SECRET` in the MediaMTX container's environment). A ready for `live/<name>` starts the radio pull from `RADIO_SOURCE_URL_TEMPLATE` (unless `RADIO_ON_READY=off`), starts the stream's startable destinations, the video HLS packager and the recording when the stream's config asks for them, and probes the input; a notready stops all of these and forgets the probe. See "Internal hooks" for the answer. `GET /api/v1/streams/{name}` shows the probe. They run through `wget` inside the MediaMTX container, which is why the `-ffmpeg` image is used (the plain image has no shell).
+- **Ports:**
+
+| Port | Where | Purpose |
+|---|---|---|
+| 1935 (RTMP) | host, `${RTMP_BIND:-127.0.0.1}:${RTMP_PORT:-1935}` | publishers push here |
+| 1937 (RTMPS) | host, `${RTMPS_BIND:-127.0.0.1}:${RTMPS_PORT:-1937}` | TLS ingest for phones; listens only with `MTX_RTMPENCRYPTION=optional` |
+| 8890 (SRT, UDP) | host, `${SRT_BIND:-127.0.0.1}:${SRT_PORT:-8890}/udp` | SRT ingest; listens only with `MTX_SRT=yes` |
+| 8554 (RTSP) | internal network only | the API pulls `live/<name>` for the radio (`RADIO_SOURCE_URL_TEMPLATE`) |
+| 9997 (API) | internal network only, not published | MediaMTX control API |
+
+HLS, WebRTC and metrics are off in MediaMTX. The relay still serves HLS itself. RTMPS and SRT are optional (see [Publishing from a phone](#publishing-from-a-phone)).
+
+- **Secrets:** `HOOK_SECRET` (generate with `openssl rand -hex 32`) is required for the auth and ready hooks; set it in `.env` for both the `api` and `mediamtx` services. The compose file also sets `MTX_AUTHHTTPADDRESS` so the secret reaches MediaMTX from the environment, not from the YAML.
+- **Production switch (plan S1):** in `deploy/docker-compose.yml` the `mediamtx` service is in the compose profile `mediamtx` and stays off until the deploy workflow's `MEDIAMTX` variable is `on` (it then writes `COMPOSE_PROFILES=mediamtx` and `HOOK_SECRET` to `.env`). While nginx-rtmp keeps `RTMP_PORT`, MediaMTX listens on `MEDIAMTX_RTMP_BIND:MEDIAMTX_RTMP_PORT` (default `127.0.0.1:1936`), so both can run side by side for a test publish. To switch: point the publisher at MediaMTX with a `stream:<name>:publish` token, set `RADIO_SOURCE_URL_TEMPLATE=rtsp://mediamtx:8554/live/{name}`, then move the host RTMP port from nginx to MediaMTX. Rollback is the reverse. The local `docker-compose.yml` already runs MediaMTX on the RTMP port.
+- **Status:** not yet verified against a live publisher or the real MediaMTX container (no Docker daemon in the build environment); only the config's YAML syntax and the compose files were checked.
+
+## CEA-608 captioned stream
+
+The optional captioner creates a second MediaMTX path, `live/<name>-cc`, from the raw `live/<name>` input. It does not re-encode: FFmpeg copies the input to FLV, the relay holds tags for the configured interval and inserts ATSC A/53 CEA-608 SEI into H.264 access units, and a second FFmpeg publishes the edited FLV back to MediaMTX. The raw path is unchanged.
+
+The captioner is off by default. Configure it with a token that has `stream:<name>:control` (or the admin token):
+
+```http
+GET /api/v1/streams/church/captioner
+PUT /api/v1/streams/church/captioner
+Content-Type: application/json
+
+{
+  "enabled": true,
+  "lang": "fi",
+  "holdSeconds": 16,
+  "syncOffsetMs": 1500
+}
+```
+
+The PUT body is a partial update. `holdSeconds` is 1-60 seconds; `syncOffsetMs` is -10000..10000 ms. The GET response includes runtime state, embedded caption count, late count and replaced-character count. Configuration persists in the stream's SQLite config. Enabling while a source is live starts the embedder; disabling stops it. A source ready/not-ready transition also starts/stops it.
+
+Requirements: FFmpeg on the API host, `HOOK_SECRET` set, and an H.264 input at 25, 30, 50 or 60 fps. The input is read from `MEDIAMTX_RTSP_BASE` (default `rtsp://mediamtx:8554`); the captioned path is published to `MEDIAMTX_RTMP_BASE` (default `rtmp://mediamtx:1935`) using the internal hook secret. `CAPTION_HOLD_SECONDS` and `CAPTION_SYNC_OFFSET_MS` set the defaults for newly configured streams. Only final caption events in the configured language are embedded. Destinations that should carry embedded captions must select variant `cc`; do not also send a separate HTTP caption track to the same broadcast.
+
+## Publishing from a phone
+
+Phones and guest encoders publish with a short-lived token for one stream. The admin token never goes on a phone. Nothing here is verified against a real phone app or a live MediaMTX yet; the steps follow the auth hook in `server/lib/mediamtx-auth.js`.
+
+**1. Issue a token** (admin token, on the server or from the CLI; `/api/` is proxied to the API):
+
+```bash
+curl -sS -X POST https://example.com/api/v1/tokens \
+  -H "Authorization: Bearer $RELAY_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{ "scopes": ["stream:example:publish", "stream:example:data"], "expiresInSeconds": 43200, "label": "phone" }'
+```
+
+The answer (`201`) has `token`, shown once. 43200 seconds is 12 hours. Revoke early with `DELETE /api/v1/tokens/{id}`.
+
+**2. Give the phone the address.** Replace `example` with the stream name (`a-z 0-9 _ -`, up to 32 characters):
+
+- RTMPS: `rtmps://example.com:1937/live/example?token=<token>`. Some apps ask for a server URL and a stream key separately; then the server is `rtmps://example.com:1937/live` and the key is `example?token=<token>` (the app's behaviour is not verified).
+- SRT (UDP): `srt://example.com:8890`, with the stream ID `publish:live/example:phone:<token>`. The hook reads the token from the password field, which is the last part of the stream ID. The user part (`phone`) is ignored. The stream-ID form follows the MediaMTX SRT documentation and is not verified here.
+
+The token must carry `stream:<name>:publish` for the path being published. Reads of the stream from the internal network need no token.
+
+**3. Open the ports on the host.** The compose file binds RTMPS and SRT to `127.0.0.1` by default, so nothing is reachable from outside. To accept phones, the operator sets `RTMPS_BIND` / `SRT_BIND` to `0.0.0.0` (or the public address) in the deploy variables, and opens the host firewall (TCP 1937 for RTMPS, UDP 8890 for SRT) only as far as needed. The firewall is set on the VPS by the operator, not by this repository.
+
+**4. Turn the listeners on.** In the deploy variables set `RTMPS_ENABLED=on` and/or `SRT_ENABLED=on`. The workflow writes `MTX_RTMPENCRYPTION=optional` and `MTX_SRT=yes` into `.env`. Both need `COMPOSE_PROFILES=mediamtx` (the `mediamtx` service). Locally, set those two variables in `.env` yourself.
+
+**RTMPS certificate.** MediaMTX reads `/certs/rtmps.crt` and `/certs/rtmps.key` from a read-only mount (`${RTMPS_CERT_DIR:-./certs}` next to the deploy compose file). Nothing copies them from this repository. Options, none tested here:
+
+- Export the certificate that Traefik already holds for `DOMAIN` from its ACME store (`acme.json`), with a tool such as `traefik-certs-dumper`, and write the certificate chain and key as `rtmps.crt` and `rtmps.key`.
+- Or let `certbot` issue a certificate with the DNS challenge (Traefik owns ports 80 and 443, so the HTTP challenge will not work) and copy it into the directory.
+
+Make the key readable by the container's user. MediaMTX reads the certificate only at start, so restart the `mediamtx` container after each renewal. If the files are missing while `MTX_RTMPENCRYPTION=optional`, MediaMTX will not start.
+
 ## Environment variables
 
 All variables have sensible defaults so the system works out of the box.
@@ -453,8 +534,15 @@ Copy `.env.example` to `.env` and override only what you need.
 
 | Variable | Default | Description |
 |---|---|---|
-| `RTMP_PORT` | `1935` | Host port mapped to the RTMP ingest (container port 1935) |
+| `RTMP_PORT` | `1935` | Host port mapped to the MediaMTX RTMP ingest (container port 1935) |
+| `RTMP_BIND` | `127.0.0.1` | Host address the RTMP port is bound to (`0.0.0.0` for direct publishers) |
 | `HTTP_PORT` | `8080` | Host port mapped to the HTTP server (container port 8080) |
+| `RTMPS_PORT` | `1937` | Host port mapped to the MediaMTX RTMPS ingest (container port 1937) |
+| `RTMPS_BIND` | `127.0.0.1` | Host address for the RTMPS port (`0.0.0.0` only when the firewall allows it) |
+| `SRT_PORT` | `8890` | Host UDP port mapped to the MediaMTX SRT ingest (container port 8890) |
+| `SRT_BIND` | `127.0.0.1` | Host address for the SRT port |
+| `MTX_RTMPENCRYPTION` | `no` | MediaMTX env override: `optional` turns RTMPS on beside RTMP. Needs `/certs/rtmps.crt` and `/certs/rtmps.key` in the container |
+| `MTX_SRT` | `no` | MediaMTX env override: `yes` turns SRT on |
 
 ### API server (`server/index.js`)
 
@@ -466,14 +554,39 @@ Copy `.env.example` to `.env` and override only what you need.
 | `STALE_MS` | `30000` | Milliseconds after the last manifest update before the stream is considered off-air |
 | `ARCHIVE_URL_PREFIX` | `/archive` | URL prefix for archive download links in `GET /api/archive` — set to your full public URL when behind a reverse proxy |
 | `RELAY_API_TOKEN` | *(unset)* | Bearer token for the control API (`/api/v1/*`). Unset means those routes answer 503 (fail closed). Generate with `openssl rand -hex 32` |
+| `RELAY_DB_PATH` | `/var/lib/relay/relay.db` | SQLite database file (streams, tokens, destinations, recordings, events). The parent directory is created when missing. Compose mounts the `relay-data` volume at `/var/lib/relay`. Tests use `:memory:` |
+| `ASSET_DIR` | `/var/lib/relay/assets` | Directory for uploaded image assets when S3 is off. Created on the first upload. Files are named by their hash |
+| `RELAY_SECRET_KEY` | *(unset)* | 64 hex chars, `openssl rand -hex 32`; encrypts destination stream keys at rest; never commit |
+| `MAX_DESTINATIONS_PER_STREAM` | `6` | Most egress destinations one stream may have; a create beyond it answers 409 |
+| `MEDIAMTX_RTSP_BASE` | `rtsp://mediamtx:8554` | RTSP base the egress children pull from (`<base>/live/<stream>[-cc]`) |
+| `HOOK_SECRET` | *(unset)* | Secret for the internal hooks (see "Internal hooks"). Unset means they answer 503 |
+| `PUBLISH_AUTH` | `off` | `on` makes nginx-rtmp publishes need a token with `stream:<name>:publish`; any other value allows all |
+| `RELAY_INTERNAL_CIDRS` | `172.16.0.0/12,10.0.0.0/8,127.0.0.0/8` | IPv4 networks whose MediaMTX reads need no token |
 | `DELAY_SECONDS` | `0` | Listener delay for audio and captions. Changeable at runtime with `PUT /api/v1/delay` |
 | `DELAY_MAX_SECONDS` | `60` | Upper bound for the delay (see `HLS_LIST_SIZE` above) |
 | `DEFAULT_STREAM` | `stream` | Stream used by the legacy routes without a name (`/api/status`, `/api/captions`) |
 | `HLS_SEGMENT_PREFIX` | `/hls/` | URL prefix of segment files named in the delayed playlist (nginx serves `/hls/`) |
+| `RADIO_ON_READY` | `on` | `off` keeps the MediaMTX ready hook from starting the radio pull (the input is still probed). Otherwise a stream's `radio` setting decides (see "Per-stream config") |
+| `PUBLIC_MEDIA_RATE_LIMIT` | `6000` | Requests per minute per IP for playback routes (`/api/streams/*/hls/...`, `/api/hls/...`, `/api/assets/...`, `/api/v1/viewer/...`). Visitors on one church Wi-Fi share an address; other public API routes keep 60/min |
+| `VIDEO_SUB_LANGS` | `fi` | Comma-separated subtitle renditions in the master playlist: language tags, or `original` for the caption events themselves. Other languages use the translation events |
+| `VIDEO_BANDWIDTH` | `2500000` | `BANDWIDTH` of the video variant in the master playlist (bits per second) |
+| `VIDEO_RESOLUTION` | `1280x720` | `RESOLUTION` of the video variant in the master playlist |
 | `CAPTION_RETENTION_SECONDS` | `3600` | How long captions stay in memory |
-| `GATEWAY_EVENTS_URL` | *(unset)* | Base URL of pigateway (e.g. `https://host:port`). When set, the relay pulls captions from `GET <url>/api/v1/events?types=transcript` (SSE) and adds them to the stream named by `GATEWAY_CAPTION_STREAM`. Unset disables the pull. `POST /api/v1/captions` keeps working either way |
+| `GATEWAY_EVENTS_URL` | *(unset)* | Base URL of pigateway (e.g. `https://host:port`). When set, the relay pulls `GET <url>/api/v1/events?types=transcript,rundown,translation,graphic` (SSE). Transcripts go to the caption buffer of the stream named by `GATEWAY_CAPTION_STREAM`; the other three become timeline events (see *Timeline events* below). Unset disables the pull. `POST /api/v1/captions` keeps working either way |
 | `GATEWAY_TOKEN` | *(unset)* | Bearer token sent to pigateway. Never shown in status output |
 | `GATEWAY_CAPTION_STREAM` | `DEFAULT_STREAM` | Stream that receives the gateway's captions |
+| `RELAY_DB_PATH` | `/var/lib/relay/relay.db` | SQLite file for the timeline events (WAL mode). The directory is created; use `:memory:` for tests |
+| `S3_ENDPOINT` | *(unset)* | S3 API base URL (path-style: `<endpoint>/<bucket>/<key>`). With `S3_BUCKET` unset, S3 is off. Used by the recording client and image assets (`server/lib/s3.js`) |
+| `S3_BUCKET` | *(unset)* | Bucket name. Required with `S3_ENDPOINT` |
+| `S3_REGION` | `us-east-1` | Region used in SigV4 signing |
+| `S3_ACCESS_KEY_ID` | *(unset)* | Access key id for SigV4 signing |
+| `S3_SECRET_ACCESS_KEY` | *(unset)* | Secret key for SigV4 signing. Never logged or returned; never commit |
+| `S3_PREFIX` | `relay/` | Prefix added to every object key in the bucket |
+| `S3_PUBLIC_ENDPOINT` | *(unset = `S3_ENDPOINT`)* | Endpoint put into presigned URLs (handoff manifest), for when `S3_ENDPOINT` is an internal address that Saarnavideo cannot reach |
+| `HANDOFF_URL_TTL_SECONDS` | `86400` | Lifetime of the presigned URLs in a handoff manifest (1 to 604800) |
+| `RELAY_NAME` | *(unset)* | Instance name put into the handoff manifest (`origin.instance`) |
+| `RECORDING_SPOOL_DIR` | `/var/lib/relay/spool` | Local spool of the recorder's 60 s segments; a segment is removed after its verified S3 upload. Needs S3 for recordings |
+| `RECORDING_SPOOL_MAX_BYTES` | `2147483648` (2 GiB) | Spool size above which recordings are `degraded` (recording goes on; nothing unuploaded is deleted) |
 
 ### FFmpeg / on-publish.sh
 
@@ -506,6 +619,10 @@ Every RTMP stream key is a stream: `rtmp://<host>:1935/live/<key>` (the key is 1
 | `GET /api/streams` | Every stream, with live state and delay |
 | `GET /api/streams/{name}/status` | Live state and delay of one stream |
 | `GET /api/streams/{name}/hls/delayed.m3u8` | Delayed audio playlist of one stream |
+| `GET /api/streams/{name}/hls/master.m3u8` | Master playlist: delayed video plus WebVTT subtitle renditions (`VIDEO_SUB_LANGS`) |
+| `GET /api/streams/{name}/hls/video/delayed.m3u8` | Delayed video playlist of one stream (needs the video HLS packager) |
+| `GET /api/streams/{name}/hls/subs/{lang}.m3u8` | Subtitle playlist of one language, same segments as the delayed video |
+| `GET /api/streams/{name}/hls/subs/{lang}/{seq}.vtt` | WebVTT captions of one video segment (`original` = captions, other tags = translations) |
 | `GET /api/streams/{name}/captions?lang=fi&from=` | Captions of one stream that are due now |
 | `POST /api/v1/streams/{name}/captions` | Push captions for one stream (Bearer) |
 | `GET`/`PUT /api/v1/streams/{name}/delay` | Read or set one stream's delay (Bearer) |
@@ -558,6 +675,10 @@ another `lang`.
 }
 ```
 
+### `GET /api/v1/viewer/{key}?mode=live|delayed`
+
+Public Server-Sent Events stream for viewer pages and the LCYT Android TV app (no token, `Access-Control-Allow-Origin: *`). The key is the stream's `viewerKey` when it has one (see "Per-stream config"), otherwise the stream name. Viewers get only the stream's `visibleLanguages`, and graphic events only when `publicGraphics` is on. `mode=live` (default) sends each timeline event as it is stored, for visitors in the building; `mode=delayed` releases events at `startedAt` plus the stream's listener delay, for remote listeners. Events: `connected`, `caption` (LCYT payload: `text`, `composedText`, `translations`, `codes.section`, `sequence`, `timestamp` without `Z`; a translation re-sends its caption with the same `sequence`), `section` and `graphic`. On connect the current section, graphic and caption are sent once. The payload builders are in `server/lib/viewer-payload.js`, the session in `server/lib/viewer-sse.js`.
+
 ### `GET /api/archive`
 
 Returns a list of archived recordings, newest first.
@@ -587,9 +708,12 @@ Anonymous aggregate statistics, and the play events the widget sends. Both are p
 | Method and path | Purpose |
 |---|---|
 | `POST /api/v1/captions` | Push up to 100 caption segments: `{ "segments": [{ "lang", "text", "startedAt", "endedAt"? }] }`. `startedAt` is epoch milliseconds on the sender's clock (NTP-synced with the relay). Answers `202 { "accepted": n }`. One bad segment rejects the whole request with a `400` that names the field. |
-| `GET /api/v1/captions/source` | Status of the pigateway caption pull: `{ "captionSource": { "configured", "connected", "lastEventAt", "received", "rejected", "deduped", "reconnects", "lastError" } }`. See *Captions from pigateway* below. |
+| `POST /api/v1/streams/{name}/events` | Push up to 100 timeline events: `{ "events": [{ "type", "lang"?, "startedAt", "endedAt"?, "sourceKey"?, "payload" }] }`. Types `caption`, `translation`, `section`, `graphic`, `marker`, `data`. Answers `202 { "added", "deduped" }`; one bad event rejects the batch with a `400` whose message starts with `events[i]`. |
+| `GET /api/v1/captions/source` | Status of the pigateway pull: `{ "captionSource": { "configured", "connected", "lastEventAt", "received", "rejected", "deduped", "reconnects", "lastError", "mapper": { "mapped", "rejected", "unknown" } } }`. |
 | `GET /api/v1/delay` | `{ "delaySeconds", "maxSeconds" }` |
 | `PUT /api/v1/delay` | `{ "delaySeconds": 20 }`, an integer from 0 to `DELAY_MAX_SECONDS`. Applies at once to audio and captions. Not persisted: a restart returns to `DELAY_SECONDS`. |
+| `GET /api/v1/streams/{name}/config` | The stream's config (see "Per-stream config"). Scope `stream:<name>:control`. |
+| `PUT /api/v1/streams/{name}/config` | Change some of it, e.g. `{ "visibleLanguages": ["fi", "sv"], "publicGraphics": false }`. Answers the full config. `400` names an invalid or unknown field; `409` when the `viewerKey` belongs to another stream. |
 | `POST /api/v1/stats/session` | `{ "event": "start" \| "end", "streamName" }`. Sent by `on-publish.sh` and `on-publish-done.sh`. |
 
 Responses: `401` for a missing or wrong token, `503` when `RELAY_API_TOKEN` is not set. The token is compared in
@@ -597,16 +721,94 @@ constant time and is never accepted in the URL.
 
 **Rate limits:** public routes 60 requests per minute per IP; `/api/v1` 600 per minute per IP.
 
+### Scoped tokens
+
+The admin token (`RELAY_API_TOKEN`) can issue narrower tokens, stored in SQLite (`RELAY_DB_PATH`) as SHA-256 hashes only. The value is shown once, when it is created.
+
+- Scopes: `admin`, or `stream:<name>:(publish|data|control|view)` where `<name>` is `a-z 0-9 _ -`, up to 32 characters.
+- `POST /api/v1/tokens` (admin) with `{ "scopes": [...], "expiresInSeconds": 60..31536000, "label": "phone" }` returns `201 { id, token, scopes, expiresAt, label }`.
+- `GET /api/v1/tokens` (admin) lists tokens without values; `DELETE /api/v1/tokens/{id}` (admin) revokes one (204, or 404 for an unknown id).
+- A token gets `401` when it is unknown, revoked or expired, and `403` when its scopes do not allow the route. The routes that exist today still accept only `RELAY_API_TOKEN`.
+- With `RELAY_API_TOKEN` unset and no stored token, the scoped checks answer `503`, as before.
+
+**Egress destinations.** A stream can be pushed to up to `MAX_DESTINATIONS_PER_STREAM` RTMP(S) destinations (`youtube`, `facebook` or `rtmp`). Scope `stream:<name>:control`, `view` is not enough.
+
+- `GET /api/v1/streams/{name}/destinations` lists them with their egress `state`; `POST` adds one; `PATCH /api/v1/streams/{name}/destinations/{id}` changes it; `DELETE` removes it (stops its child).
+- `POST .../destinations/{id}/start` and `/stop` run or stop one ffmpeg child that copies the relay stream (no re-encoding) to the destination.
+- Keys are stored encrypted with `RELAY_SECRET_KEY` and are never returned (`hasKey` only). Without that variable a destination with a key answers 503.
+- States: `off`, `starting`, `live` (5 s without exit), `retrying` (restart with backoff 2 s doubling to 60 s), `failed` (ffmpeg could not be started; no automatic retry). The stderr tail is redacted.
+- When the stream goes live (MediaMTX ready hook), every destination with `enabled` and `startWith: "stream"` is started; `startWith: "manual"` destinations wait for the `start` route. A destination whose stored key cannot be read is logged without the key and skipped. When the stream drops (notready), all of the stream's destinations are stopped.
+
+### Per-stream config
+
+`GET` and `PUT /api/v1/streams/{name}/config` need scope `stream:<name>:control` (the admin token passes; a `view` token gets `403`). The config is stored as JSON in the `streams` table. `PUT` changes only the fields it sends; unknown fields are refused with `400`.
+
+| Field | Default | Effect |
+|---|---|---|
+| `visibleLanguages` | `["*"]` | `["*"]` = every language that arrives (visitors pick their own on `/view`). Or 1 to 10 language tags (lower case, e.g. `fi`, `sv-ax`), no repeats: viewers then get translations only in these languages, and `composedText` shows the first of them that is not the caption's own language. |
+| `radio` | `true` | `false`: the MediaMTX ready hook does not start the radio pull for this stream. `RADIO_ON_READY=off` still wins. |
+| `publicGraphics` | `true` | `false`: graphic events are not sent to viewers (on connect or live). |
+| `viewerKey` | `null` | 8 to 64 characters `a-z 0-9 _ -`, unique across streams. When set, viewers connect to `/api/v1/viewer/{viewerKey}` and the stream name no longer opens the viewer. Clearing it (`null`) restores the name. A cleared key that is also a valid stream name (up to 32 characters) opens a stream of that name, so keep keys longer than that. |
+| `videoHls` | `false` | `true`: the ready hook starts the video HLS packager (copy-only, `<HLS_DIR>/<stream>/video/stream.m3u8`, 4 s segments); notready stops it. |
+| `recordOnLive` | `false` | `true` and S3 configured: the ready hook starts a recording (see "Recordings to S3"); notready stops it and uploads the rest. Without S3 the hook logs it and does not record. |
+
+Changes apply at once, to open viewers too.
+
+**Late translations.** A translation that arrives after its `startedAt` plus the stream's current delay is stored with `payload.late: true` and counted per stream in `relay_translations_late_total{stream="..."}` on `/metrics` (counted from process start, not persisted). It is counted for pigateway translations and for the push route alike.
+
+**Recordings to S3.** `POST /api/v1/streams/{name}/recordings` starts a copy-only recorder (60 s fragmented MP4 segments in `RECORDING_SPOOL_DIR`) and answers `202` with the session; a running one is returned as it is. `DELETE /api/v1/streams/{name}/recordings/current` stops it: the remaining segments are uploaded, then `recordings/<stream>/<sessionId>/sidecars/*` and `session.json` are written once. `GET /api/v1/streams/{name}/recordings` lists them from the database. Scope `stream:<name>:control`. Without `S3_ENDPOINT` and `S3_BUCKET` the start answers `503`.
+
+- Segments are uploaded to `recordings/<stream>/<sessionId>/<NNNNNN>.mp4` every 5 s, checked by size (and ETag) with a HEAD, then removed locally. An S3 error keeps the file and the next pass retries it.
+- States: `recording`, `degraded` (spool over `RECORDING_SPOOL_MAX_BYTES`; back to `recording` when under), `failed` (the recorder could not be started), `stopping` (uploads still retried after stop), `stopped`, `interrupted` (shutdown, or a crash found at the next start; the spool is kept and nothing is uploaded yet).
+- The recorder restarts with backoff like an egress child and continues the segment numbering.
+- **Handoff to Saarnavideo.** At stop, `recordings/<stream>/<sessionId>/handoff.json` is written next to `session.json` (needs an S3 client that can presign; the URLs in the stored file expire after `HANDOFF_URL_TTL_SECONDS`). `GET /api/v1/streams/{name}/recordings/{sessionId}/handoff` (scope `control`) returns the same LCYT handoff manifest v1 with fresh presigned URLs for a stopped recording: one `clean` feed (the segments as parts, start = segment number x 60 s), a VTT per caption language, `section` events as `cue` markers (Saarnavideo cuts sections from them), `marker` events as `marker` markers, `data` events as variables. `origin.system` is `lcyt` because Saarnavideo's schema requires it; `origin.groupId` is `<stream>-<sessionId>`. Send it with `curl -s -H "Authorization: Bearer $RELAY_TOKEN" $RELAY/api/v1/streams/main/recordings/$ID/handoff > handoff.json` and then `POST <saarnavideo>/api/imports/lcyt` with the manifest as the JSON body's `manifest` field (or host the JSON and send `{ "manifestUrl": ... }`), authorised with Saarnavideo's `ACCESS_SECRET` as a Bearer token. There is no automatic push. Never verified against a real Saarnavideo.
+- With `recordOnLive` on, the ready hook starts the recording and the notready hook stops it (the rest is uploaded and `session.json` is written).
+- At startup, rows a crash left in `recording`, `degraded` or `stopping` are marked `interrupted`, and the log says how many segments are still in each session's spool. Those segments are not uploaded by the relay; they stay in `RECORDING_SPOOL_DIR` for a person to look at.
+
+**Timeline events.** Every event is stored in SQLite (`events` table) per stream with a `sourceKey` for de-duplication per stream and type. Final pigateway transcripts are stored as `caption` events with `sourceKey` = `epoch:seq`, next to the caption buffer. Pigateway `translation` events become `translation` events (`sourceKey` = `<sourceKey>:<lang>`); `rundown` snapshots become a `section` event whenever the section title changes; unknown pigateway events are ignored and counted in `mapper.unknown`. The push route above takes the same shape from senders that do not go through pigateway.
+
+**`graphic` contract.** A pigateway `graphic` event carries a relay event object with `type: "graphic"` (the same shape `POST .../events` accepts, `startedAt` optional and defaulting to the receive time). `payload.kind` is one of `hymn-verse`, `slide`, `image`, `text`, `clear`. `hymn-verse` takes `hymnNumber`, `title`, `verse` and `lines[]` (or `text`); `image` and `slide` take an `assetId` (`<64 hex>.png|jpg|webp`). An invalid graphic is counted in `mapper.rejected` and dropped.
+
+### Internal hooks
+
+Used by MediaMTX and nginx-rtmp, not by clients. They are not in `openapi.json`, and nginx answers `404` for `/internal/` on the public port, so they are reachable from the Docker network only. Both need `HOOK_SECRET` (`?secret=` or `x-hook-secret`): `503` when it is unset, `401` when it is wrong.
+
+- `POST /internal/mediamtx/auth` (MediaMTX `authMethod: http`): `200` to allow, `401` to deny. Publish needs a token with `stream:<name>:publish` (query `token=` or the password). A `live/<name>-cc` path (the captioner) needs `secret=<HOOK_SECRET>`. Reads from an address in `RELAY_INTERNAL_CIDRS` are allowed; other reads need a token with `stream:<name>:view`. The `api` and `metrics` actions are denied.
+- `POST /internal/publish-auth` (nginx-rtmp `on_publish`, form body): `200` to allow, `403` when the token is missing or lacks the scope. With `PUBLISH_AUTH` off (default) it always answers `200`. nginx cannot read env, so `nginx/nginx.conf` carries a `__HOOK_SECRET__` placeholder that must be replaced with `HOOK_SECRET` before nginx starts.
+- `POST /internal/mediamtx/ready` and `POST /internal/mediamtx/notready` (MediaMTX `runOnReady` / `runOnNotReady`, query `path=live/<name>`): `200` with a summary, also for paths that are ignored (`action: "ignored"`, e.g. other paths and the `-cc` captioner). Ready starts, for `live/<name>`, the radio pull (unless `RADIO_ON_READY=off` or the stream's `radio` is `false`), the destinations with `enabled` and `startWith: "stream"`, the video HLS packager (`videoHls`) and the recording (`recordOnLive`, needs S3); it probes the input in the background. Notready stops the radio pull, the destinations, the HLS packager and the recording, and clears the probe. Each action is independent: a failure is logged without secrets, listed in `failed`, and the others still run. The answer has `action` (`start`, `stop`, `ignored` or `error`), `stream`, `radio` (`start`, `stop`, `ignored` or `error`), `destinations` (how many were started or stopped), `hls` and `recording` (`start`, `stop`, `ignored` or `error`), and `failed` (the names of the actions that failed). MediaMTX does not retry a hook, so the answer is always `200` once the secret is right.
+
+### Image assets
+
+Images (PNG, JPEG or WebP, up to 10 MB) are uploaded per stream and served by id. The id is the SHA-256 of the bytes plus the extension, so identical bytes are stored once.
+
+| Method and path | Purpose |
+|---|---|
+| `POST /api/v1/streams/{name}/assets` | Upload one image. Body is the raw image; `Content-Type` must be `image/png`, `image/jpeg` or `image/webp` and match the bytes. Scope `stream:<name>:data` (or the admin token). Returns `201 { assetId, size, reused }`. `415` for a type mismatch, `413` over 10 MB |
+| `GET /api/assets/{assetId}` | Serve the image (public). Cached for a year (`immutable`) |
+
+With `S3_ENDPOINT` and `S3_BUCKET` set, images go to `assets/<assetId>` in the bucket (under `S3_PREFIX`); otherwise to `ASSET_DIR`.
+
 ### Listener page (`/listen`)
 
-`GET /listen` serves a page with the delayed audio, a play button, a language choice (fi, sv, en or all) and captions shown as the relay releases them. The page is one HTML file (`server/public/listen.html`) that loads hls.js from cdnjs. Safari plays the HLS stream natively. Open it with `?lang=sv` to start in Swedish.
+`GET /listen` serves a page with the delayed audio, a play button, a language choice (fi, sv, en or all) and captions shown as the relay releases them. The page is one HTML file (`server/public/listen.html`) that loads hls.js from cdnjs. Safari plays the HLS stream natively. Open it with `?lang=sv` to start in Swedish. The section heading and the hymn or picture panel come from the delayed viewer stream (`/api/v1/viewer/{key}?mode=delayed`).
+
+### Viewer pages
+
+| Route | Page |
+|---|---|
+| `GET /view/{key}` | Church visitors' page: live captions (no delay), section heading, hymn panel, picture panel. Query: `theme=dark\|light`, `fontsize=<rem>`, `lang=<code>\|original\|all` |
+| `GET /embed/viewer?key={key}` | Caption-only overlay for an iframe. Query: `theme`, `fontsize`, `lang`, `bg=transparent` |
+| `GET /watch?stream={s}` | Delayed video (hls.js on `/api/streams/{s}/hls/master.m3u8`) with the viewer panels beside it |
+| `GET /viewer/*` | Static assets of the pages (`viewer-app.js`, `viewer-utils.js`, `viewer.css`), cached five minutes |
+
+The key is a stream name (`a-z 0-9 _ -`, up to 32 characters); anything else answers 404. The church page is the one for phones in the building: big caption text, the chosen language kept in the browser (`localStorage`), and the screen kept awake with the Wake Lock API where the browser has it. It reads the same public SSE as the LCYT viewer, so the text and the translations match what LCYT shows. The pages are plain ES modules with no build step; event text is only ever put on the page with `textContent`.
 
 ### Remote CLI
 
 `cli/` is a zero-dependency command-line client generated from `server/openapi.json`:
 
 ```bash
-cd cli && npm run generate            # regenerate after changing openapi.json
+cd cli && pnpm run generate           # regenerate after changing openapi.json
 export TUBERADIO_URL=https://radio.example.com TUBERADIO_TOKEN=...
 node src/cli.js ops                   # list operations
 node src/cli.js getStatus

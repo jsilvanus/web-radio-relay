@@ -9,13 +9,19 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { openStore } from '../lib/store.js';
+import { createToken } from '../lib/tokens.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const TOKEN = 'test-token-123';
+const HOOK_SECRET = 'hook-secret-test-456';
 const PORT = 31000 + Math.floor(Math.random() * 2000);
 const base = `http://127.0.0.1:${PORT}`;
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tuberadio-'));
 const hls = path.join(dir, 'hls');
+// A file, not ':memory:': the expired-token test inserts a row through its own connection.
+const dbPath = path.join(dir, 'relay.db');
 fs.mkdirSync(hls);
 let child;
 
@@ -59,9 +65,15 @@ before(async () => {
       HIDDEN_ARCHIVE_DIR: path.join(dir, 'hidden'),
       STATS_FILE: path.join(dir, 'stats.json'),
       RELAY_API_TOKEN: TOKEN,
+      RELAY_DB_PATH: ':memory:',
       METRICS_BEARER_TOKEN: 'metrics-token',
+      RELAY_SECRET_KEY: '5'.repeat(64),
+      HOOK_SECRET: HOOK_SECRET,
+      PUBLISH_AUTH: 'off',
+      RADIO_SOURCE_URL_TEMPLATE: '',
       DELAY_SECONDS: '8',
       DELAY_MAX_SECONDS: '30',
+      RELAY_DB_PATH: dbPath,
     },
     stdio: 'ignore',
   });
@@ -180,6 +192,24 @@ test('listener page is served and loads hls.js and the caption feed', async () =
   assert.match(html, /\/api\/streams\//);
 });
 
+test('viewer pages and their assets are served; bad keys get 404', async () => {
+  const pages = [
+    ['/view/stream', /text\/html/],
+    ['/embed/viewer?key=stream', /text\/html/],
+    ['/watch?stream=stream', /text\/html/],
+    ['/viewer/viewer-utils.js', /javascript/],
+    ['/viewer/viewer.css', /text\/css/],
+  ];
+  for (const [path, type] of pages) {
+    const res = await fetch(`${base}${path}`, { redirect: 'manual' });
+    assert.equal(res.status, 200, path);
+    assert.match(res.headers.get('content-type'), type, path);
+  }
+  assert.equal((await fetch(`${base}/view/BAD!`)).status, 404);
+  assert.equal((await fetch(`${base}/embed/viewer`)).status, 404);
+  assert.equal((await fetch(`${base}/watch?stream=BAD!`)).status, 404);
+});
+
 test('root and named stream paths redirect to listener page', async () => {
   const root = await fetch(`${base}/`, { redirect: 'manual' });
   assert.equal(root.status, 302);
@@ -250,4 +280,726 @@ test('caption source status is token protected and reports disabled when no gate
   const body = await (await fetch(`${base}/api/v1/captions/source`, { headers: auth })).json();
   assert.equal(body.captionSource.configured, false);
   assert.equal(body.captionSource.connected, false);
+  assert.deepEqual(body.captionSource.mapper, { mapped: 0, rejected: 0, unknown: 0 });
+});
+
+test('event push: a valid batch is accepted with added and deduped counts', async () => {
+  const now = Date.now();
+  const events = [
+    { type: 'section', startedAt: now, payload: { title: 'Saarna', index: 2 }, sourceKey: 'push-sec-1' },
+    { type: 'marker', startedAt: now, payload: { label: 'Kohta A' } },
+    { type: 'data', startedAt: now, payload: { name: 'virsi', value: { n: 12 } } },
+  ];
+  const first = await fetch(`${base}/api/v1/streams/stream/events`, { method: 'POST', headers: auth, body: JSON.stringify({ events }) });
+  assert.equal(first.status, 202);
+  assert.deepEqual(await first.json(), { added: 3, deduped: 0 });
+
+  const again = await fetch(`${base}/api/v1/streams/stream/events`, { method: 'POST', headers: auth, body: JSON.stringify({ events: [events[0]] }) });
+  assert.equal(again.status, 202);
+  assert.deepEqual(await again.json(), { added: 0, deduped: 1 });
+});
+
+test('event push: one invalid event rejects the batch and the message names its index', async () => {
+  const now = Date.now();
+  const res = await fetch(`${base}/api/v1/streams/stream/events`, {
+    method: 'POST',
+    headers: auth,
+    body: JSON.stringify({ events: [
+      { type: 'marker', startedAt: now, payload: { label: 'ok' } },
+      { type: 'graphic', startedAt: now, payload: { kind: 'fireworks' } },
+    ] }),
+  });
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.match(body.error, /^events\[1\]: /);
+});
+
+test('event push: refuses a missing token and a bad stream name', async () => {
+  const body = JSON.stringify({ events: [{ type: 'marker', startedAt: Date.now(), payload: { label: 'x' } }] });
+  const noToken = await fetch(`${base}/api/v1/streams/stream/events`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+  assert.equal(noToken.status, 401);
+  const badName = await fetch(`${base}/api/v1/streams/BAD%20NAME/events`, { method: 'POST', headers: auth, body });
+  assert.equal(badName.status, 400);
+});
+
+// --- scoped tokens (P2.2) ---------------------------------------------------
+
+const json = (body) => JSON.stringify(body);
+const withToken = (t) => ({ Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' });
+const sha256hex = (v) => createHash('sha256').update(v).digest('hex');
+let phone; // issued with stream:keskus:publish + stream:keskus:data
+let admin; // issued with the admin scope
+
+test('token API: admin issues a token; the value is returned once', async () => {
+  const res = await fetch(`${base}/api/v1/tokens`, {
+    method: 'POST',
+    headers: auth,
+    body: json({ scopes: ['stream:keskus:publish', 'stream:keskus:data'], expiresInSeconds: 3600, label: 'phone' }),
+  });
+  assert.equal(res.status, 201);
+  phone = await res.json();
+  assert.match(phone.id, /^tok_[0-9a-f]{12}$/);
+  assert.match(phone.token, /^[0-9a-f]{64}$/);
+  assert.deepEqual(phone.scopes, ['stream:keskus:publish', 'stream:keskus:data']);
+  assert.equal(phone.label, 'phone');
+  assert.equal(typeof phone.expiresAt, 'number');
+  assert.ok(phone.expiresAt > Date.now());
+});
+
+test('token API: the list never shows values or hashes', async () => {
+  const res = await fetch(`${base}/api/v1/tokens`, { headers: auth });
+  assert.equal(res.status, 200);
+  const text = await res.text();
+  const body = JSON.parse(text);
+  assert.ok(body.tokens.some((t) => t.id === phone.id && t.label === 'phone'));
+  assert.ok(!text.includes(phone.token));
+  assert.ok(!text.includes(sha256hex(phone.token)));
+  assert.ok(!body.tokens.some((t) => 'hash' in t || 'token' in t));
+});
+
+test('token API: invalid bodies answer 400', async () => {
+  const bad = [
+    undefined,
+    { scopes: [] },
+    { scopes: ['stream:Keskus:data'] },
+    { scopes: ['admin'], expiresInSeconds: 10 },
+    { scopes: ['admin'], label: 'x'.repeat(65) },
+  ];
+  for (const body of bad) {
+    const res = await fetch(`${base}/api/v1/tokens`, {
+      method: 'POST',
+      headers: auth,
+      body: body === undefined ? undefined : json(body),
+    });
+    assert.equal(res.status, 400, JSON.stringify(body));
+    assert.equal(typeof (await res.json()).error, 'string');
+  }
+});
+
+test('token API: a stream token is 403 on admin routes, no token is 401', async () => {
+  assert.equal((await fetch(`${base}/api/v1/tokens`, { headers: withToken(phone.token) })).status, 403);
+  assert.equal((await fetch(`${base}/api/v1/tokens`)).status, 401);
+  assert.equal((await fetch(`${base}/api/v1/tokens`, { headers: withToken('unknown') })).status, 401);
+});
+
+test('token API: a stored admin token works, and deleting it makes it 401', async () => {
+  const res = await fetch(`${base}/api/v1/tokens`, {
+    method: 'POST',
+    headers: auth,
+    body: json({ scopes: ['admin'] }),
+  });
+  assert.equal(res.status, 201);
+  admin = await res.json();
+  assert.equal(admin.expiresAt, null);
+  assert.equal((await fetch(`${base}/api/v1/tokens`, { headers: withToken(admin.token) })).status, 200);
+
+  const del = await fetch(`${base}/api/v1/tokens/${admin.id}`, { method: 'DELETE', headers: auth });
+  assert.equal(del.status, 204);
+  assert.equal((await fetch(`${base}/api/v1/tokens`, { headers: withToken(admin.token) })).status, 401);
+  // revoking again is still 204; an unknown id is 404
+  assert.equal((await fetch(`${base}/api/v1/tokens/${admin.id}`, { method: 'DELETE', headers: auth })).status, 204);
+  const unknown = await fetch(`${base}/api/v1/tokens/tok_000000000000`, { method: 'DELETE', headers: auth });
+  assert.equal(unknown.status, 404);
+});
+
+test('token API: an expired token is 401', async () => {
+  const store = openStore(dbPath);
+  let expired;
+  try {
+    // issued two minutes ago with a one-minute life: expired now
+    expired = createToken(store.db, { scopes: ['admin'], expiresInSeconds: 60 }, Date.now() - 120_000);
+  } finally {
+    store.close();
+  }
+  assert.equal((await fetch(`${base}/api/v1/tokens`, { headers: withToken(expired.token) })).status, 401);
+});
+
+test('old control routes keep the env token only; stored tokens do not open them', async () => {
+  assert.equal((await fetch(`${base}/api/v1/delay`, { headers: auth })).status, 200);
+  assert.equal((await fetch(`${base}/api/v1/delay`, { headers: withToken(phone.token) })).status, 401);
+  assert.equal((await fetch(`${base}/api/v1/delay`, { headers: withToken(admin.token) })).status, 401);
+});
+
+// --- internal hooks (P2.3 / P3.2) ---------------------------------------------
+
+const form = (fields) => new URLSearchParams(fields).toString();
+const formHeaders = { 'Content-Type': 'application/x-www-form-urlencoded' };
+const mediamtx = (body, headers = {}) =>
+  fetch(`${base}/internal/mediamtx/auth`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: json(body),
+  });
+
+/** Starts another API process on `port` with the given env; resolves once it answers. */
+async function startExtra(port, env) {
+  const extraDir = fs.mkdtempSync(path.join(dir, 'extra-'));
+  const proc = spawn(process.execPath, [path.join(here, '..', 'index.js')], {
+    env: {
+      ...process.env,
+      PORT: String(port),
+      HLS_DIR: hls,
+      ARCHIVE_DIR: path.join(extraDir, 'archive'),
+      HIDDEN_ARCHIVE_DIR: path.join(extraDir, 'hidden'),
+      STATS_FILE: path.join(extraDir, 'stats.json'),
+      RELAY_API_TOKEN: TOKEN,
+      METRICS_BEARER_TOKEN: 'metrics-token',
+      RELAY_DB_PATH: path.join(extraDir, 'relay.db'),
+      HOOK_SECRET: '',
+      PUBLISH_AUTH: '',
+      ...env,
+    },
+    stdio: 'ignore',
+  });
+  const url = `http://127.0.0.1:${port}`;
+  for (let i = 0; i < 100; i++) {
+    try {
+      if ((await fetch(`${url}/api/status`)).ok) return { url, proc };
+    } catch { /* not up yet */ }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  proc.kill();
+  throw new Error('extra server did not start');
+}
+
+test('internal hooks: missing or wrong secret is 401 (both answer styles)', async () => {
+  const body = { action: 'publish', path: 'live/keskus', query: '' };
+  assert.equal((await mediamtx(body)).status, 401);
+  assert.equal((await mediamtx(body, { 'x-hook-secret': 'wrong' })).status, 401);
+  const wrongQuery = await fetch(`${base}/internal/mediamtx/auth?secret=wrong`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: json(body),
+  });
+  assert.equal(wrongQuery.status, 401);
+  const noSecret = await fetch(`${base}/internal/publish-auth`, { method: 'POST', headers: formHeaders, body: form({ name: 'keskus' }) });
+  assert.equal(noSecret.status, 200, 'PUBLISH_AUTH is off: publishes are allowed without the secret');
+});
+
+test('mediamtx hook: publish with a stored token, reads from inside, captioner path, other actions', async () => {
+  const publish = await mediamtx({ action: 'publish', path: 'live/keskus', query: `token=${phone.token}` }, { 'x-hook-secret': HOOK_SECRET });
+  assert.equal(publish.status, 200);
+  assert.equal((await publish.json()).allow, true);
+  assert.equal((await mediamtx({ action: 'publish', path: 'live/keskus', password: phone.token }, { 'x-hook-secret': HOOK_SECRET })).status, 200);
+  assert.equal((await mediamtx({ action: 'publish', path: 'live/keskus', query: '' }, { 'x-hook-secret': HOOK_SECRET })).status, 401);
+  assert.equal((await mediamtx({ action: 'publish', path: 'live/other', query: `token=${phone.token}` }, { 'x-hook-secret': HOOK_SECRET })).status, 401);
+  assert.equal((await mediamtx({ action: 'read', path: 'live/keskus', ip: '172.17.0.4' }, { 'x-hook-secret': HOOK_SECRET })).status, 200);
+  assert.equal((await mediamtx({ action: 'read', path: 'live/keskus', ip: '203.0.113.9' }, { 'x-hook-secret': HOOK_SECRET })).status, 401);
+  assert.equal((await mediamtx({ action: 'api', path: 'live/keskus', ip: '172.17.0.4' }, { 'x-hook-secret': HOOK_SECRET })).status, 401);
+  assert.equal((await mediamtx({ action: 'publish', path: 'live/keskus-cc', query: `secret=${HOOK_SECRET}` }, { 'x-hook-secret': HOOK_SECRET })).status, 200);
+  assert.equal((await mediamtx({ action: 'publish', path: 'live/keskus-cc', query: '' }, { 'x-hook-secret': HOOK_SECRET })).status, 401);
+  const denied = await (await mediamtx({ action: 'publish', path: 'live/keskus', query: 'token=nope' }, { 'x-hook-secret': HOOK_SECRET })).text();
+  assert.ok(!denied.includes('nope'), 'a deny body never echoes the token');
+});
+
+test('publish-auth: with PUBLISH_AUTH off every publish is allowed', async () => {
+  const withBadToken = await fetch(`${base}/internal/publish-auth?secret=wrong`, {
+    method: 'POST',
+    headers: formHeaders,
+    body: form({ name: 'keskus', args: 'token=nope', addr: '203.0.113.9' }),
+  });
+  assert.equal(withBadToken.status, 200);
+});
+
+test('publish-auth: with PUBLISH_AUTH on, token scope decides (403), a bad secret is 401', async () => {
+  const dbPath2 = path.join(dir, 'publish-on.db');
+  const store2 = openStore(dbPath2);
+  let good, other;
+  try {
+    good = createToken(store2.db, { scopes: ['stream:keskus:publish'] }, Date.now());
+    other = createToken(store2.db, { scopes: ['stream:other:publish'] }, Date.now());
+  } finally {
+    store2.close();
+  }
+  const port = PORT + 1;
+  const extra = await startExtra(port, { HOOK_SECRET: 'extra-hook-secret', PUBLISH_AUTH: 'on', RELAY_DB_PATH: dbPath2 });
+  try {
+    const hook = (secret, args, name = 'keskus') =>
+      fetch(`${extra.url}/internal/publish-auth?secret=${secret}`, {
+        method: 'POST',
+        headers: formHeaders,
+        body: form({ name, args, addr: '203.0.113.9' }),
+      });
+    assert.equal((await hook('extra-hook-secret', `token=${good.token}`)).status, 200);
+    assert.equal((await hook('extra-hook-secret', `token=${other.token}`)).status, 403);
+    assert.equal((await hook('extra-hook-secret', '')).status, 403);
+    assert.equal((await hook('extra-hook-secret', 'token=nope')).status, 403);
+    assert.equal((await hook('wrong', `token=${good.token}`)).status, 401);
+    const viaMediamtx = await fetch(`${extra.url}/internal/mediamtx/auth`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-hook-secret': 'extra-hook-secret' },
+      body: json({ action: 'publish', path: 'live/keskus', query: `token=${good.token}` }),
+    });
+    assert.equal(viaMediamtx.status, 200);
+  } finally {
+    extra.proc.kill();
+  }
+});
+
+test('internal hooks answer 503 when HOOK_SECRET is unset', async () => {
+  const port = PORT + 2;
+  const extra = await startExtra(port, { PUBLISH_AUTH: 'on' });
+  try {
+    const mtx = await fetch(`${extra.url}/internal/mediamtx/auth`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-hook-secret': 'anything' },
+      body: json({ action: 'read', path: 'live/keskus', ip: '172.17.0.4' }),
+    });
+    assert.equal(mtx.status, 503);
+    const pub = await fetch(`${extra.url}/internal/publish-auth?secret=anything`, {
+      method: 'POST',
+      headers: formHeaders,
+      body: form({ name: 'keskus', args: 'token=x' }),
+    });
+    assert.equal(pub.status, 503);
+    const ready = await fetch(`${extra.url}/internal/mediamtx/ready?path=live/keskus`, {
+      method: 'POST',
+      headers: { 'x-hook-secret': 'anything' },
+    });
+    assert.equal(ready.status, 503);
+  } finally {
+    extra.proc.kill();
+  }
+});
+
+const hook = (route, query, headers = {}) =>
+  fetch(`${base}/internal/mediamtx/${route}?${query}`, { method: 'POST', headers });
+
+test('ready/notready: missing or wrong secret is 401 (header and query)', async () => {
+  assert.equal((await hook('ready', 'path=live/keskus')).status, 401);
+  assert.equal((await hook('ready', 'path=live/keskus', { 'x-hook-secret': 'wrong' })).status, 401);
+  assert.equal((await hook('notready', 'path=live/keskus&secret=wrong')).status, 401);
+});
+
+test('ready/notready: valid secret; live paths answer 200, other and -cc paths are ignored', async () => {
+  const headers = { 'x-hook-secret': HOOK_SECRET };
+  // RADIO_SOURCE_URL_TEMPLATE is empty in this server, so the start fails and is answered, not raised.
+  const ready = await hook('ready', 'path=live/keskus', headers);
+  assert.equal(ready.status, 200);
+  // The answer is the summary of every action (ready-hooks.js); with no HLS or recording configured those are ignored.
+  const failedRadio = { action: 'error', stream: 'keskus', radio: 'error', destinations: 0, hls: 'ignored', recording: 'ignored', failed: ['radio'] };
+  assert.deepEqual(await ready.json(), failedRadio);
+  const viaQuery = await hook('ready', `path=live/keskus&secret=${HOOK_SECRET}`);
+  assert.equal(viaQuery.status, 200);
+  assert.deepEqual(await viaQuery.json(), failedRadio);
+  assert.deepEqual(await (await hook('ready', 'path=other/keskus', headers)).json(), { action: 'ignored' });
+  assert.deepEqual(await (await hook('ready', 'path=live/keskus-cc', headers)).json(), { action: 'ignored' });
+  assert.deepEqual(await (await hook('ready', '', headers)).json(), { action: 'ignored' });
+  const notready = await hook('notready', 'path=live/keskus', headers);
+  assert.equal(notready.status, 200);
+  assert.deepEqual(await notready.json(), {
+    action: 'stop', stream: 'keskus', radio: 'stop', destinations: 0, hls: 'ignored', recording: 'ignored', failed: [],
+  });
+  assert.deepEqual(await (await hook('notready', 'path=live/keskus-cc', headers)).json(), { action: 'ignored' });
+});
+
+test('GET /api/v1/streams/:name needs the token and has probe null until the source is probed', async () => {
+  const bearer = { Authorization: `Bearer ${TOKEN}` };
+  assert.equal((await fetch(`${base}/api/v1/streams/keskus`)).status, 401);
+  const res = await fetch(`${base}/api/v1/streams/keskus`, { headers: bearer });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.stream.name, 'keskus');
+  assert.equal(body.stream.probe, null);
+  assert.equal((await fetch(`${base}/api/v1/streams/Bad!`, { headers: bearer })).status, 400);
+  // "lifecycle" is a valid stream name: the list route must still win over the name route.
+  const list = await (await fetch(`${base}/api/v1/streams/lifecycle`, { headers: bearer })).json();
+  assert.ok(Array.isArray(list.streams));
+});
+
+// --- viewer SSE (P7.5) --------------------------------------------------------
+
+/** Read SSE frames from a fetch response until aborted. Comments are skipped. */
+async function openSse(url) {
+  const ctl = new AbortController();
+  const res = await fetch(url, { signal: ctl.signal });
+  const frames = [];
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const pump = (async () => {
+    try {
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let cut;
+        while ((cut = buffer.indexOf('\n\n')) >= 0) {
+          const block = buffer.slice(0, cut);
+          buffer = buffer.slice(cut + 2);
+          const name = /^event: (.*)$/m.exec(block)?.[1];
+          const data = /^data: (.*)$/m.exec(block)?.[1];
+          if (name && data) frames.push({ event: name, data: JSON.parse(data) });
+        }
+      }
+    } catch { /* aborted */ }
+  })();
+  return { res, frames, close: () => ctl.abort(), pump };
+}
+
+async function waitUntil(pred, ms = 5000) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (pred()) return true;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return pred();
+}
+
+test('viewer: public, CORS *, no token needed, and the connected event arrives', async () => {
+  const sse = await openSse(`${base}/api/v1/viewer/viewerpub`);
+  try {
+    assert.equal(sse.res.status, 200);
+    assert.match(sse.res.headers.get('content-type'), /^text\/event-stream/);
+    assert.equal(sse.res.headers.get('access-control-allow-origin'), '*');
+    assert.equal(await waitUntil(() => sse.frames.some((f) => f.event === 'connected')), true);
+  } finally {
+    sse.close();
+  }
+});
+
+test('viewer: refuses a bad key and a bad mode with 400', async () => {
+  const badKey = await fetch(`${base}/api/v1/viewer/BAD%20KEY`);
+  assert.equal(badKey.status, 400);
+  const badMode = await fetch(`${base}/api/v1/viewer/viewerpub?mode=fast`);
+  assert.equal(badMode.status, 400);
+});
+
+test('viewer live: a pushed caption reaches the viewer at once, and a translation re-sends it', async () => {
+  const set = await fetch(`${base}/api/v1/streams/viewerlive/config`, {
+    method: 'PUT',
+    headers: auth,
+    body: JSON.stringify({ visibleLanguages: ['fi', 'en'] }),
+  });
+  assert.equal(set.status, 200);
+  const sse = await openSse(`${base}/api/v1/viewer/viewerlive?mode=live`);
+  try {
+    assert.equal(await waitUntil(() => sse.frames.some((f) => f.event === 'connected')), true);
+    const now = Date.now();
+    const push = await fetch(`${base}/api/v1/streams/viewerlive/events`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ events: [
+        { type: 'section', startedAt: now, payload: { title: 'Saarna' } },
+        { type: 'caption', lang: 'fi', startedAt: now, sourceKey: 'live-1', payload: { text: 'Hyvää huomenta' } },
+      ] }),
+    });
+    assert.equal(push.status, 202);
+    assert.equal(await waitUntil(() => sse.frames.some((f) => f.event === 'caption')), true);
+    const first = sse.frames.find((f) => f.event === 'caption').data;
+    assert.equal(first.text, 'Hyvää huomenta');
+    assert.equal(first.codes.section, 'Saarna');
+    assert.match(first.timestamp, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}$/);
+
+    const translated = await fetch(`${base}/api/v1/streams/viewerlive/events`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ events: [
+        { type: 'translation', lang: 'en', startedAt: now, sourceKey: 'live-1:en', payload: { text: 'Good morning', sourceKey: 'live-1' } },
+      ] }),
+    });
+    assert.equal(translated.status, 202);
+    assert.equal(await waitUntil(() => sse.frames.filter((f) => f.event === 'caption').length === 2), true);
+    const again = sse.frames.filter((f) => f.event === 'caption')[1].data;
+    assert.equal(again.sequence, first.sequence);
+    assert.deepEqual(again.translations, { en: 'Good morning' });
+    assert.equal(again.composedText, 'Hyvää huomenta<br>Good morning');
+  } finally {
+    sse.close();
+  }
+});
+
+test('viewer delayed: an event waits for the stream delay before it is sent', async () => {
+  const set = await fetch(`${base}/api/v1/streams/viewerdelay/delay`, {
+    method: 'PUT',
+    headers: auth,
+    body: JSON.stringify({ delaySeconds: 2 }),
+  });
+  assert.equal(set.status, 200);
+
+  const sse = await openSse(`${base}/api/v1/viewer/viewerdelay?mode=delayed`);
+  try {
+    assert.equal(await waitUntil(() => sse.frames.some((f) => f.event === 'connected')), true);
+    const startedAt = Date.now();
+    await fetch(`${base}/api/v1/streams/viewerdelay/events`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ events: [
+        { type: 'caption', lang: 'fi', startedAt, sourceKey: 'delay-1', payload: { text: 'Viivästetty' } },
+      ] }),
+    });
+    await new Promise((r) => setTimeout(r, 600));
+    assert.equal(sse.frames.some((f) => f.event === 'caption'), false, 'not released before startedAt + delay');
+    assert.equal(await waitUntil(() => sse.frames.some((f) => f.event === 'caption'), 4000), true);
+    assert.ok(Date.now() - startedAt >= 1900, 'released after about the delay');
+  } finally {
+    sse.close();
+  }
+});
+
+test('config routes: GET and PUT per stream; the env token passes; no token is 401', async () => {
+  const get = await fetch(`${base}/api/v1/streams/cfgone/config`, { headers: auth });
+  assert.equal(get.status, 200);
+  const defaults = await get.json();
+  assert.equal(defaults.stream, 'cfgone');
+  assert.deepEqual(defaults.config.visibleLanguages, ['*']);
+  assert.equal(defaults.config.radio, true);
+  assert.equal(defaults.config.viewerKey, null);
+
+  const put = await fetch(`${base}/api/v1/streams/cfgone/config`, {
+    method: 'PUT',
+    headers: auth,
+    body: json({ visibleLanguages: ['sv', 'en'], radio: false }),
+  });
+  assert.equal(put.status, 200);
+  const { config } = await put.json();
+  assert.deepEqual(config.visibleLanguages, ['sv', 'en']);
+  assert.equal(config.radio, false);
+  assert.equal(config.publicGraphics, true, 'fields not sent keep their value');
+
+  assert.equal((await fetch(`${base}/api/v1/streams/cfgone/config`)).status, 401);
+  assert.equal((await fetch(`${base}/api/v1/streams/cfgone/config`, { method: 'PUT', body: json({}) })).status, 401);
+
+  // radio false: MediaMTX ready hook leaves the radio pull alone for this stream (P8)
+  const ready = await fetch(`${base}/internal/mediamtx/ready?path=live/cfgone`, {
+    method: 'POST',
+    headers: { 'x-hook-secret': HOOK_SECRET },
+  });
+  assert.deepEqual(await ready.json(), {
+    action: 'ignored', stream: 'cfgone', radio: 'ignored', destinations: 0, hls: 'ignored', recording: 'ignored', failed: [],
+  });
+});
+
+test('captioner routes: per-stream config persists and runtime status is returned', async () => {
+  const url = `${base}/api/v1/streams/capone/captioner`;
+  const initial = await fetch(url, { headers: auth });
+  assert.equal(initial.status, 200);
+  const before = await initial.json();
+  assert.equal(before.config.enabled, false);
+  assert.equal(before.status.state, 'off');
+
+  const updated = await fetch(url, {
+    method: 'PUT',
+    headers: auth,
+    body: json({ enabled: true, lang: 'fi', holdSeconds: 12, syncOffsetMs: 900 }),
+  });
+  assert.equal(updated.status, 200);
+  const afterPut = await updated.json();
+  assert.deepEqual(afterPut.config, { enabled: true, lang: 'fi', holdSeconds: 12, syncOffsetMs: 900 });
+  assert.equal(afterPut.status.state, 'off', 'configuration persists without starting a process before the source is live');
+
+  const afterGet = await fetch(url, { headers: auth });
+  assert.deepEqual((await afterGet.json()).config, afterPut.config);
+
+  const invalid = await fetch(url, {
+    method: 'PUT',
+    headers: auth,
+    body: json({ holdSeconds: 0 }),
+  });
+  assert.equal(invalid.status, 400);
+  assert.match((await invalid.json()).error, /holdSeconds/);
+  assert.equal((await fetch(url)).status, 401);
+});
+
+test('config routes: a control token works on its own stream only; a view token is 403', async () => {
+  const control = await (await fetch(`${base}/api/v1/tokens`, {
+    method: 'POST', headers: auth, body: json({ scopes: ['stream:cfgtwo:control'] }),
+  })).json();
+  const view = await (await fetch(`${base}/api/v1/tokens`, {
+    method: 'POST', headers: auth, body: json({ scopes: ['stream:cfgtwo:view'] }),
+  })).json();
+
+  const ok = await fetch(`${base}/api/v1/streams/cfgtwo/config`, {
+    method: 'PUT', headers: withToken(control.token), body: json({ publicGraphics: false }),
+  });
+  assert.equal(ok.status, 200);
+  assert.equal((await ok.json()).config.publicGraphics, false);
+  assert.equal((await fetch(`${base}/api/v1/streams/cfgtwo/config`, { headers: withToken(control.token) })).status, 200);
+  assert.equal((await fetch(`${base}/api/v1/streams/cfgthree/config`, { headers: withToken(control.token) })).status, 403);
+
+  assert.equal((await fetch(`${base}/api/v1/streams/cfgtwo/config`, { headers: withToken(view.token) })).status, 403);
+  const viewPut = await fetch(`${base}/api/v1/streams/cfgtwo/config`, {
+    method: 'PUT', headers: withToken(view.token), body: json({ radio: false }),
+  });
+  assert.equal(viewPut.status, 403);
+});
+
+test('config routes: invalid bodies answer 400 and name the field', async () => {
+  const unknown = await fetch(`${base}/api/v1/streams/cfgone/config`, {
+    method: 'PUT', headers: auth, body: json({ visibleLanguage: ['fi'] }),
+  });
+  assert.equal(unknown.status, 400);
+  assert.match((await unknown.json()).error, /unknown config field: visibleLanguage/);
+
+  const empty = await fetch(`${base}/api/v1/streams/cfgone/config`, {
+    method: 'PUT', headers: auth, body: json({ visibleLanguages: [] }),
+  });
+  assert.equal(empty.status, 400);
+  assert.match((await empty.json()).error, /visibleLanguages/);
+});
+
+test('viewerKey: the key opens the stream, the stream name stops working, another stream cannot take the key', async () => {
+  const set = await fetch(`${base}/api/v1/streams/vkeyone/config`, {
+    method: 'PUT', headers: auth, body: json({ viewerKey: 'vkey-one-secret' }),
+  });
+  assert.equal(set.status, 200);
+
+  const sse = await openSse(`${base}/api/v1/viewer/vkey-one-secret?mode=live`);
+  try {
+    assert.equal(await waitUntil(() => sse.frames.some((f) => f.event === 'connected')), true);
+    assert.equal(sse.frames.find((f) => f.event === 'connected').data.stream, 'vkeyone');
+  } finally {
+    sse.close();
+  }
+
+  assert.equal((await fetch(`${base}/api/v1/viewer/vkeyone`)).status, 404, 'the name no longer opens it');
+
+  const taken = await fetch(`${base}/api/v1/streams/vkeytwo/config`, {
+    method: 'PUT', headers: auth, body: json({ viewerKey: 'vkey-one-secret' }),
+  });
+  assert.equal(taken.status, 409);
+});
+
+test('late translations: a translation that started long before it arrived is counted in /metrics; a future one is not', async () => {
+  const now = Date.now();
+  const push = await fetch(`${base}/api/v1/streams/latestream/events`, {
+    method: 'POST',
+    headers: auth,
+    body: json({ events: [
+      { type: 'translation', lang: 'en', startedAt: now - 60_000, sourceKey: 'late-1:en', payload: { text: 'Late', sourceKey: 'late-1' } },
+      { type: 'translation', lang: 'sv', startedAt: now + 60_000, sourceKey: 'early-1:sv', payload: { text: 'Tidig', sourceKey: 'early-1' } },
+    ] }),
+  });
+  assert.equal(push.status, 202);
+  const text = await (await fetch(`${base}/metrics`, { headers: { Authorization: 'Bearer metrics-token' } })).text();
+  assert.match(text, /# TYPE relay_translations_late_total counter/);
+  assert.match(text, /relay_translations_late_total\{stream="latestream"\} 1/);
+});
+
+test('viewer: a viewer that connects mid-service gets the current state', async () => {
+  const now = Date.now();
+  await fetch(`${base}/api/v1/streams/viewerstate/events`, {
+    method: 'POST',
+    headers: auth,
+    body: JSON.stringify({ events: [
+      { type: 'graphic', startedAt: now - 3000, payload: { kind: 'hymn-verse', hymnNumber: '7', title: 'Virsi', verse: 1, lines: ['Ensimmäinen'] } },
+      { type: 'caption', lang: 'fi', startedAt: now - 1000, sourceKey: 'state-1', payload: { text: 'Juuri nyt' } },
+    ] }),
+  });
+  const sse = await openSse(`${base}/api/v1/viewer/viewerstate?mode=live`);
+  try {
+    assert.equal(await waitUntil(() => sse.frames.some((f) => f.event === 'caption')), true);
+    assert.equal(sse.frames.find((f) => f.event === 'graphic').data.hymnNumber, '7');
+    assert.equal(sse.frames.find((f) => f.event === 'caption').data.text, 'Juuri nyt');
+  } finally {
+    sse.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Egress destinations (P4.1, P4.3). No ffmpeg is started here: start is only
+// called on a disabled destination, which answers 409 before any spawn.
+// ---------------------------------------------------------------------------
+
+function issueToken(scopes) {
+  const store = openStore(dbPath);
+  try {
+    return createToken(store.db, { scopes }, Date.now());
+  } finally {
+    store.close();
+  }
+}
+
+const DEST_KEY = 'ROUTE-TEST-KEY-901';
+
+test('destinations: a control-scope token creates, lists and reads them; the key never appears', async () => {
+  const control = issueToken(['stream:chapel:control']);
+  const created = await fetch(`${base}/api/v1/streams/chapel/destinations`, {
+    method: 'POST',
+    headers: withToken(control.token),
+    body: json({ name: 'main', kind: 'rtmp', url: 'rtmp://user:pw@relay.example.com/app', key: DEST_KEY }),
+  });
+  const createdText = await created.text();
+  assert.equal(created.status, 201, createdText);
+  const dest = JSON.parse(createdText).destination;
+  assert.match(dest.id, /^dst_[0-9a-f]{12}$/);
+  assert.equal(dest.hasKey, true);
+  assert.equal(dest.url, 'rtmp://[REDACTED]@relay.example.com/app');
+  assert.equal(dest.state.state, 'off');
+  assert.equal(createdText.includes(DEST_KEY), false);
+  assert.equal(createdText.includes(':pw@'), false);
+
+  const listed = await fetch(`${base}/api/v1/streams/chapel/destinations`, { headers: withToken(control.token) });
+  const listedText = await listed.text();
+  assert.equal(listed.status, 200);
+  const body = JSON.parse(listedText);
+  assert.equal(body.stream, 'chapel');
+  assert.deepEqual(body.destinations.map((d) => d.name), ['main']);
+  assert.equal(listedText.includes(DEST_KEY), false);
+  assert.equal(listedText.includes(sha256hex(DEST_KEY)), false);
+});
+
+test('destinations: view scope is 403, another stream is 403, no token is 401', async () => {
+  const view = issueToken(['stream:chapel:view']);
+  const other = issueToken(['stream:hall:control']);
+  const url = `${base}/api/v1/streams/chapel/destinations`;
+  assert.equal((await fetch(url, { headers: withToken(view.token) })).status, 403);
+  assert.equal((await fetch(url, { headers: withToken(other.token) })).status, 403);
+  assert.equal((await fetch(url)).status, 401);
+  assert.equal((await fetch(url, { method: 'POST', headers: withToken(view.token), body: json({ name: 'x', kind: 'rtmp', url: 'rtmp://a.example.com/x' }) })).status, 403);
+});
+
+test('destinations: the env admin token works; invalid bodies answer 400 naming the field', async () => {
+  const bad = await fetch(`${base}/api/v1/streams/chapel/destinations`, {
+    method: 'POST',
+    headers: auth,
+    body: json({ name: 'Main', kind: 'rtmp', url: 'rtmp://a.example.com/x' }),
+  });
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /name must match/);
+  const badStream = await fetch(`${base}/api/v1/streams/Chapel/destinations`, { headers: auth });
+  assert.equal(badStream.status, 400);
+});
+
+test('destinations: PATCH, start of a disabled one (409), stop and DELETE', async () => {
+  const url = `${base}/api/v1/streams/chapel/destinations`;
+  const made = await (await fetch(url, {
+    method: 'POST',
+    headers: auth,
+    body: json({ name: 'backup', kind: 'rtmp', url: 'rtmp://b.example.com/app', key: DEST_KEY, enabled: false }),
+  })).json();
+  const id = made.destination.id;
+
+  const patched = await fetch(`${url}/${id}`, { method: 'PATCH', headers: auth, body: json({ variant: 'cc' }) });
+  assert.equal(patched.status, 200);
+  assert.equal((await patched.json()).destination.variant, 'cc');
+  assert.equal((await fetch(`${url}/dst_000000000000`, { method: 'PATCH', headers: auth, body: json({ variant: 'raw' }) })).status, 404);
+
+  const start = await fetch(`${url}/${id}/start`, { method: 'POST', headers: auth });
+  assert.equal(start.status, 409);
+  assert.match((await start.json()).error, /disabled/);
+
+  const stop = await fetch(`${url}/${id}/stop`, { method: 'POST', headers: auth });
+  assert.equal(stop.status, 200);
+  const stopBody = await stop.json();
+  assert.equal(stopBody.id, id);
+  assert.equal(stopBody.state.state, 'off');
+  assert.equal((await fetch(`${url}/dst_000000000000/stop`, { method: 'POST', headers: auth })).status, 404);
+
+  assert.equal((await fetch(`${url}/${id}`, { method: 'DELETE', headers: auth })).status, 204);
+  assert.equal((await fetch(`${url}/${id}`, { method: 'DELETE', headers: auth })).status, 404);
+  const after = await (await fetch(url, { headers: auth })).text();
+  assert.equal(after.includes('"backup"'), false);
+  assert.equal(after.includes(DEST_KEY), false);
+});
+
+test('destinations: the per-stream limit answers 409 on the seventh destination', async () => {
+  const url = `${base}/api/v1/streams/limit/destinations`;
+  for (let i = 1; i <= 6; i++) {
+    const res = await fetch(url, { method: 'POST', headers: auth, body: json({ name: `d${i}`, kind: 'rtmp', url: 'rtmp://c.example.com/app' }) });
+    assert.equal(res.status, 201);
+  }
+  const seventh = await fetch(url, { method: 'POST', headers: auth, body: json({ name: 'd7', kind: 'rtmp', url: 'rtmp://c.example.com/app' }) });
+  assert.equal(seventh.status, 409);
+  assert.match((await seventh.json()).error, /at most 6/);
 });

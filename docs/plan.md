@@ -4,6 +4,9 @@ Last reviewed: 2026-10-28
 
 ## Goal
 
+The wider plan, which turns this relay into a general web media relay (video fan-out, recording, video HLS, data channels, CEA-608 embedding), is [`media-relay-plan.md`](media-relay-plan.md). This file stays the radio plan.
+
+
 Provide public audio-only HLS radio, server-side listener delay, timed captions, and MP3 archives. The relay owns the lifecycle of each source-pull session; PiGateway is an authenticated control client and must not proxy audio or supervise FFmpeg itself.
 
 ## Current input architecture

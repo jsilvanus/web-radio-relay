@@ -7,20 +7,63 @@
  *   GET  /api/stats                  aggregate anonymous play/session statistics
  *   POST /api/stats/event            play event from the widget
  *   GET  /api/hls/delayed.m3u8       live audio playlist, delayed server side
+ *   GET  /api/streams/{s}/hls/video/delayed.m3u8   live video playlist, delayed the same way
+ *   GET  /api/streams/{s}/hls/master.m3u8          master: delayed video + subtitle renditions
+ *   GET  /api/streams/{s}/hls/subs/{lang}.m3u8     subtitle playlist (one VTT per video segment)
+ *   GET  /api/streams/{s}/hls/subs/{lang}/{seq}.vtt  WebVTT captions of one video segment
  *   GET  /api/captions               captions released for listeners (?lang=&from=&limit=)
  *   GET  /api/openapi.json           the OpenAPI document of this API
  *   GET  /listen                     listener page: audio plus captions
+ *   GET  /view/{key}                 church visitors' caption page (live, phone first)
+ *   GET  /embed/viewer?key=          caption-only overlay for an iframe
+ *   GET  /watch?stream=              delayed video player with the viewer panels
+ *   GET  /api/v1/viewer/{key}        LCYT-compatible viewer SSE (?mode=live|delayed), public, CORS *
  *
  * Control (Bearer RELAY_API_TOKEN, see docs/API.md):
  *   POST /api/v1/captions            sender pushes timed captions (and later translations)
- *   GET  /api/v1/captions/source     status of the pigateway caption pull (GATEWAY_EVENTS_URL)
+ *   POST /api/v1/streams/{s}/events  push timeline events (batch of up to 100, see README)
+ *   GET  /api/v1/captions/source     status of the pigateway pull (GATEWAY_EVENTS_URL), incl. mapper stats
  *   GET  /api/v1/delay               read the listener delay
  *   PUT  /api/v1/delay               set the listener delay (0 .. DELAY_MAX_SECONDS)
  *   POST /api/v1/stats/session       stream session start/end (shell scripts)
+ *   POST /api/v1/tokens              admin: issue a scoped token (value shown once)
+ *   GET  /api/v1/tokens              admin: list tokens (never the values)
+ *   DELETE /api/v1/tokens/:id        admin: revoke a token
+ *   GET    /api/v1/streams/{s}/destinations            list egress destinations with their state (control scope)
+ *   POST   /api/v1/streams/{s}/destinations            add a destination (key stored encrypted)
+ *   PATCH  /api/v1/streams/{s}/destinations/{id}       change a destination
+ *   DELETE /api/v1/streams/{s}/destinations/{id}       remove a destination (stops its egress)
+ *   POST   /api/v1/streams/{s}/destinations/{id}/start start one egress child
+ *   POST   /api/v1/streams/{s}/destinations/{id}/stop  stop one egress child
+ *   GET  /api/v1/streams/{s}/captioner  CEA-608 embedder status and config (scope stream:<s>:control)
+ *   PUT  /api/v1/streams/{s}/captioner  configure/start/stop the CEA-608 embedder
+ *   GET  /api/v1/streams/{s}/config  per-stream config (scope stream:<s>:control)
+ *   PUT  /api/v1/streams/{s}/config  set part of it: visibleLanguages, radio, videoHls, recordOnLive, publicGraphics, viewerKey
+ *   POST   /api/v1/streams/{s}/recordings             start recording the stream to S3 (202, needs S3)
+ *   DELETE /api/v1/streams/{s}/recordings/current     stop it: uploads the rest, writes session.json
+ *   GET    /api/v1/streams/{s}/recordings/{id}/handoff  Saarnavideo handoff manifest with fresh presigned URLs
+ *   GET    /api/v1/streams/{s}/recordings             recordings of the stream from the database
+ *
+ * Internal (not in openapi.json, not proxied by nginx):
+ *   POST /internal/mediamtx/auth     MediaMTX authMethod http hook
+ *   POST /internal/publish-auth      nginx-rtmp on_publish hook
+ *   POST /internal/mediamtx/ready    MediaMTX runOnReady (radio pull, probe, destinations, video HLS, recording)
+ *   POST /internal/mediamtx/notready MediaMTX runOnNotReady (stops all of them; the recording uploads the rest)
  *
  * Environment variables:
  *   PORT                     Port to listen on                          (default: 3000)
- *   RELAY_API_TOKEN          Bearer token for /api/v1 (unset = control API answers 503)
+ *   RELAY_API_TOKEN          Bearer token for /api/v1 (unset = control API answers 503 unless a stored token exists)
+ *   HOOK_SECRET              Secret for the /internal hooks (?secret= or x-hook-secret); unset = hooks answer 503
+ *   RADIO_ON_READY           "off" keeps MediaMTX ready hooks from starting the radio pull (default: on)
+ *   RADIO_SOURCE_URL_TEMPLATE  Input URL of the radio pull and the probe, with {name} (default: unset = no radio)
+ *   PUBLISH_AUTH             "on" makes /internal/publish-auth check tokens; anything else allows all (default: off)
+ *   RELAY_INTERNAL_CIDRS     IPv4 CIDRs whose reads need no token (default: 172.16.0.0/12,10.0.0.0/8,127.0.0.0/8)
+ *   RELAY_DB_PATH            SQLite database file (default: /var/lib/relay/relay.db)
+ *   ASSET_DIR                Image asset directory when S3 is unset     (default: /var/lib/relay/assets)
+ *   S3_ENDPOINT, S3_BUCKET   Store image assets in S3 (see README)      (default: unset = local ASSET_DIR)
+ *   S3_PUBLIC_ENDPOINT, HANDOFF_URL_TTL_SECONDS, RELAY_NAME  Handoff manifest URLs and instance name (see README)
+ *   RECORDING_SPOOL_DIR      Local spool for recorder segments           (default: /var/lib/relay/spool)
+ *   RECORDING_SPOOL_MAX_BYTES  Spool size above which recordings are degraded (default: 2 GiB)
  *   DELAY_SECONDS            Listener delay for audio and captions     (default: 0)
  *   DELAY_MAX_SECONDS        Largest delay the API accepts; sizes the ffmpeg playlist (default: 60)
  *   HLS_SEGMENT_PREFIX       URL prefix of segment files in playlists  (default: /hls/)
@@ -28,6 +71,7 @@
  *   GATEWAY_EVENTS_URL       Base URL of pigateway; captions are pulled from its SSE bus (default: unset / disabled)
  *   GATEWAY_TOKEN            Bearer token for the gateway                (default: unset)
  *   GATEWAY_CAPTION_STREAM   Stream that receives the gateway captions   (default: DEFAULT_STREAM)
+ *   RELAY_DB_PATH            SQLite file for the timeline events; ':memory:' for tests (default: /var/lib/relay/relay.db)
  *   HLS_DIR                  Directory containing stream.m3u8           (default: /var/www/radio/hls)
  *   ARCHIVE_DIR              Directory containing archived MP3s         (default: /var/www/radio/archive)
  *   HIDDEN_ARCHIVE_DIR       Directory for hidden (aged-out) archives   (default: /var/www/radio/hidden_archive)
@@ -52,12 +96,42 @@ import fs from 'fs';
 import path from 'path';
 import https from 'https';
 import { fileURLToPath } from 'url';
-import { requireBearer } from './lib/auth.js';
-import { buildDelayedPlaylist } from './lib/hls-delay.js';
+import { spawn } from 'child_process';
+import { requireBearer, requireScope, tokensEqual } from './lib/auth.js';
+import { openStore } from './lib/store.js';
+import { createToken, findTokenByValue, listTokens, revokeToken, validateTokenRequest } from './lib/tokens.js';
+import { decide } from './lib/mediamtx-auth.js';
+import { createS3Client, s3ConfigFromEnv } from './lib/s3.js';
+import { createAssetStore } from './lib/assets.js';
+import { registerAssetRoutes } from './lib/asset-routes.js';
+import { buildDelayedPlaylist, parseMediaPlaylist } from './lib/hls-delay.js';
+import {
+  CUE_LOOKBACK_MS, isSubtitleLang, masterPlaylist, segmentSeq, subsPlaylist, vttForSegment,
+} from './lib/vtt-segments.js';
 import { validateCaptionBody } from './lib/captions.js';
 import { isValidStreamName, StreamRegistry } from './lib/streams.js';
 import { StreamSupervisor } from './lib/stream-supervisor.js';
+import { createReadyHandler } from './lib/ready-hooks.js';
+import { createProbeService } from './lib/probe-service.js';
+import { createCaptionerService } from './lib/captioner-service.js';
 import { GatewayCaptions } from './lib/gateway-captions.js';
+import { createGatewayMapper } from './lib/gateway-map.js';
+import { addEvents, rangeEvents, eventsAfterId, maxEventId } from './lib/event-store.js';
+import { createEventBus, storeAndPublish } from './lib/event-bus.js';
+import { openViewerSession, closeViewerSessions, VIEWER_MODES } from './lib/viewer-sse.js';
+import { EgressSupervisor } from './lib/egress-supervisor.js';
+import { createRecordingService, reconcileInterruptedRecordings } from './lib/recording-service.js';
+import { createRecordingRouter } from './lib/recording-routes.js';
+import { HlsPackager } from './lib/hls-packager.js';
+import { listSizeFor } from './lib/hls-args.js';
+import {
+  DEFAULT_MAX_DESTINATIONS, createDestination, deleteDestination, destinationExists, listDestinations,
+  loadEgressTarget, startableDestinationIds, updateDestination,
+} from './lib/destinations.js';
+import { DEFAULT_RTSP_BASE } from './lib/ffmpeg-input.js';
+import { validateEventBatch } from './lib/events.js';
+import { getConfig, putConfig, resolveViewerStream, StreamConfigError, VIEWER_KEY } from './lib/stream-config.js';
+import { createLateCounter, markLateTranslations } from './lib/translation-ingest.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -82,6 +156,23 @@ const STATS_FILE = process.env.STATS_FILE || '/var/www/radio/stats/stats.json';
 const STATS_SESSION_DAYS = Number(process.env.STATS_SESSION_DAYS) || 90;
 /** Bearer token for the control API (/api/v1). Unset = control routes answer 503. */
 const RELAY_API_TOKEN = process.env.RELAY_API_TOKEN || '';
+/** Secret for /internal/* hooks. Also the internal secret that `-cc` captioner publishes must present. */
+const HOOK_SECRET = process.env.HOOK_SECRET || '';
+/** When not "on", /internal/publish-auth answers 200 for every publish (default). */
+const PUBLISH_AUTH_ON = process.env.PUBLISH_AUTH === 'on';
+const RELAY_INTERNAL_CIDRS = (process.env.RELAY_INTERNAL_CIDRS || '172.16.0.0/12,10.0.0.0/8,127.0.0.0/8')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+/** SQLite store: streams, scoped tokens, destinations, recordings, events */
+const store = openStore();
+const db = store.db;
+/** Directory for image assets when S3 is not configured (S3 wins when S3_ENDPOINT and S3_BUCKET are set) */
+const ASSET_DIR = process.env.ASSET_DIR || '/var/lib/relay/assets';
+const s3Config = s3ConfigFromEnv(process.env);
+/** One S3 client for assets and recordings; null when S3 is not configured. */
+const s3Client = s3Config ? createS3Client(s3Config) : null;
+const assetStore = createAssetStore({ s3: s3Client, dir: ASSET_DIR });
 
 /** Stream used by the legacy routes (/api/status, /api/captions, /api/hls/...) */
 const DEFAULT_STREAM = process.env.DEFAULT_STREAM || 'stream';
@@ -98,6 +189,23 @@ const streams = new StreamRegistry({
   defaultDelaySeconds: INITIAL_DELAY_SECONDS,
   maxDelaySeconds: DELAY_MAX_SECONDS,
 });
+/** In-process fan-out of stored timeline events to the viewer SSE (P7.5) */
+const eventBus = createEventBus();
+/** Translations stored after their release time (P8), per stream; exposed in /metrics. */
+const lateTranslations = createLateCounter();
+/**
+ * Store timeline events of one stream and publish them (gateway pull and push route). A translation that
+ * arrived after startedAt + the stream's current delay is stored with payload.late and counted (P8).
+ */
+function storeStreamEvents(stream, events, nowMs) {
+  markLateTranslations(events, { delayMs: streams.delayOf(stream) * 1000, nowMs });
+  const before = maxEventId(db);
+  const result = storeAndPublish(db, eventBus, stream, events, nowMs);
+  if (result.added > 0) {
+    lateTranslations.add(stream, eventsAfterId(db, stream, before).filter((r) => r.type === 'translation' && r.payload.late).length);
+  }
+  return result;
+}
 /** Captions pulled from pigateway's SSE bus; disabled when GATEWAY_EVENTS_URL is unset */
 const GATEWAY_EVENTS_URL = process.env.GATEWAY_EVENTS_URL || '';
 const GATEWAY_CAPTION_STREAM = process.env.GATEWAY_CAPTION_STREAM || DEFAULT_STREAM;
@@ -108,12 +216,119 @@ const gatewayCaptions = new GatewayCaptions({
   streams,
   retentionSeconds: CAPTION_RETENTION_SECONDS,
   log: (msg) => console.log(`[gateway-captions] ${msg}`),
+  mapper: createGatewayMapper(),
+  storeEvents: (stream, events, nowMs) => storeStreamEvents(stream, events, nowMs),
 });
+/** Input URL of the radio pull and of the probe, with {name}. Deployment config only. */
+const RADIO_SOURCE_URL_TEMPLATE = process.env.RADIO_SOURCE_URL_TEMPLATE || '';
+/** "off" keeps the MediaMTX ready hook from starting the radio pull (the probe still runs). */
+const RADIO_ON_READY = (process.env.RADIO_ON_READY ?? 'on').trim().toLowerCase() !== 'off';
 const supervisor = new StreamSupervisor({
   hlsDir: HLS_DIR, archiveDir: ARCHIVE_DIR,
   logDir: process.env.LOG_DIR || '/var/log/tuberadio',
-  sourceTemplate: process.env.RADIO_SOURCE_URL_TEMPLATE || '', staleMs: STALE_MS,
+  sourceTemplate: RADIO_SOURCE_URL_TEMPLATE, staleMs: STALE_MS,
   onSession: (name, event, timestamp) => { if (event === 'start') recordSessionStart(name, timestamp); else recordSessionEnd(name, timestamp); }
+});
+/** Last ffprobe result per stream (in memory); empty when RADIO_SOURCE_URL_TEMPLATE is unset. */
+const probeService = createProbeService({
+  spawnProcess: spawn,
+  urlFor: (name) => RADIO_SOURCE_URL_TEMPLATE.replaceAll('{name}', name),
+  log: (msg) => console.log(`[probe] ${msg}`),
+});
+
+/** Captioner probes its raw MediaMTX input independently of the optional radio pull URL. */
+const CAPTIONER_RTSP_BASE = process.env.MEDIAMTX_RTSP_BASE || DEFAULT_RTSP_BASE;
+const CAPTIONER_RTMP_BASE = process.env.MEDIAMTX_RTMP_BASE || 'rtmp://mediamtx:1935';
+const CAPTIONER_RTSP_ROOT = CAPTIONER_RTSP_BASE.endsWith('/') ? CAPTIONER_RTSP_BASE.slice(0, -1) : CAPTIONER_RTSP_BASE;
+const captionerProbeService = createProbeService({
+  spawnProcess: spawn,
+  urlFor: (name) => `${CAPTIONER_RTSP_ROOT}/live/${name}`,
+  log: (msg) => console.log(`[captioner-probe] ${msg}`),
+});
+
+// Clear both probe caches on not-ready; a reconnect may change the source codec or frame rate.
+const readyHookProbe = {
+  probe: (name) => probeService.probe(name),
+  clear: (name) => { probeService.clear(name); captionerProbeService.clear(name); },
+};
+
+/** Live CEA-608 embedder: raw RTSP -> FLV/Node SEI edit -> captioned RTMP variant. */
+const captionerService = createCaptionerService({
+  spawnProcess: spawn,
+  getProbe: (name) => captionerProbeService.get(name),
+  probe: (name) => captionerProbeService.probe(name),
+  bus: eventBus,
+  rtspBase: CAPTIONER_RTSP_BASE,
+  rtmpBase: CAPTIONER_RTMP_BASE,
+  secret: HOOK_SECRET,
+  defaultHoldSeconds: Number(process.env.CAPTION_HOLD_SECONDS) || 16,
+  defaultSyncOffsetMs: Number(process.env.CAPTION_SYNC_OFFSET_MS ?? 1500),
+  log: (msg) => console.log(`[captioner] ${msg}`),
+});
+/** Secret key (64 hex) that seals destination stream keys at rest. Unset = keys cannot be stored (503). */
+const RELAY_SECRET_KEY = process.env.RELAY_SECRET_KEY || '';
+/** Most destinations one stream may have (P4.1). */
+const MAX_DESTINATIONS_PER_STREAM = (() => {
+  const n = Number(process.env.MAX_DESTINATIONS_PER_STREAM);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_MAX_DESTINATIONS;
+})();
+/** One ffmpeg child per (stream, destination), pushing copies of the relay's streams to RTMP(S) (P4.3). */
+const egress = new EgressSupervisor({
+  rtspBase: process.env.MEDIAMTX_RTSP_BASE || DEFAULT_RTSP_BASE,
+  spawnProcess: spawn,
+});
+
+/** Local spool of the recorder segments (P5.3); each closed segment is uploaded to S3 and removed from here. */
+const RECORDING_SPOOL_DIR = process.env.RECORDING_SPOOL_DIR || '/var/lib/relay/spool';
+/** Spool size above which recordings are marked degraded (nothing unuploaded is deleted). */
+const RECORDING_SPOOL_MAX_BYTES = (() => {
+  const n = Number(process.env.RECORDING_SPOOL_MAX_BYTES);
+  return Number.isInteger(n) && n > 0 ? n : 2 * 1024 ** 3;
+})();
+/** Recorders for S3 recordings; start answers 503 when S3 is not configured. */
+const recordings = createRecordingService({
+  db,
+  s3: s3Client,
+  spoolDir: RECORDING_SPOOL_DIR,
+  spoolMaxBytes: RECORDING_SPOOL_MAX_BYTES,
+  handoffTtlSeconds: (() => {
+    const n = Number(process.env.HANDOFF_URL_TTL_SECONDS);
+    return Number.isInteger(n) && n >= 1 && n <= 604800 ? n : 86400;
+  })(),
+  relayName: process.env.RELAY_NAME || '',
+  rtspBase: process.env.MEDIAMTX_RTSP_BASE || DEFAULT_RTSP_BASE,
+  spawnProcess: spawn,
+  log: (msg) => console.log(msg),
+});
+// Rows a crash left in recording/degraded/stopping become interrupted; spool files stay on disk.
+reconcileInterruptedRecordings({ db, spoolDir: RECORDING_SPOOL_DIR, log: (msg) => console.log(msg) });
+
+/** Video HLS packager (P6.1): <HLS_DIR>/<stream>/video/, started by the ready hook when videoHls is on. */
+const hlsPackager = new HlsPackager({
+  hlsDir: HLS_DIR,
+  hlsTime: 4,
+  listSize: listSizeFor(DELAY_MAX_SECONDS, 4),
+  rtspBase: process.env.MEDIAMTX_RTSP_BASE || DEFAULT_RTSP_BASE,
+  spawnProcess: spawn,
+});
+
+/**
+ * MediaMTX ready and notready hooks: start or stop the radio pull, the stream's startable
+ * destinations, the video HLS packager and the recording. Each is independent (ready-hooks.js).
+ */
+const readyHooks = createReadyHandler({
+  supervisor, probe: readyHookProbe,
+  // RADIO_ON_READY=off wins; otherwise the stream's own `radio` setting decides (P8).
+  radioOnReady: (name) => RADIO_ON_READY && getConfig(db, name).radio,
+  log: (msg) => console.log(`[ready-hooks] ${msg}`),
+  egress,
+  listStartable: (name) => startableDestinationIds(db, name),
+  loadTarget: (name, id) => loadEgressTarget(db, name, id, { secretKey: RELAY_SECRET_KEY }),
+  hls: hlsPackager,
+  recordings,
+  s3Configured: Boolean(s3Client),
+  getConfig: (name) => getConfig(db, name),
+  captioner: captionerService,
 });
 
 /** Email provider: 'sendgrid' | 'mailgun' | '' (disabled) */
@@ -157,8 +372,24 @@ const controlLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later.' },
 });
 
-app.use('/api/v1/', controlLimiter);
-app.use('/api/', (req, res, next) => (req.path.startsWith('/v1/') ? next() : apiLimiter(req, res, next)));
+// Playback traffic (HLS playlists, segments' captions, images, the viewer stream) comes
+// from many visitors behind one address (the church Wi-Fi), so it gets its own, much
+// higher limit per IP instead of the 60/min API limit.
+const mediaLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Math.max(60, Number(process.env.PUBLIC_MEDIA_RATE_LIMIT) || 6000),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+});
+const isMediaPath = (p) => /^\/streams\/[^/]+\/hls\//.test(p) || p.startsWith('/hls/') || p.startsWith('/assets/');
+
+// The public viewer stream (P7.5) is not control traffic: it uses the media limiter instead (see below).
+app.use('/api/v1/', (req, res, next) => (req.path.startsWith('/viewer/') ? next() : controlLimiter(req, res, next)));
+app.use('/api/', (req, res, next) => {
+  if (req.path.startsWith('/v1/')) return next();
+  return isMediaPath(req.path) ? mediaLimiter(req, res, next) : apiLimiter(req, res, next);
+});
 app.use(express.json({ limit: '256kb' }));
 const requireToken = requireBearer(RELAY_API_TOKEN);
 /** Bearer token for GET /metrics (Prometheus scrape). Unset = /metrics answers 503. */
@@ -509,6 +740,8 @@ app.get('/metrics', requireMetricsToken, (_req, res) => {
     `web_radio_relay_live_plays_total ${_statsCache.livePlayCount}`,
     '# TYPE web_radio_relay_stream_sessions_total counter',
     `web_radio_relay_stream_sessions_total ${_statsCache.streamSessions.length}`,
+    '# TYPE relay_translations_late_total counter',
+    ...lateTranslations.entries().map(([s, n]) => `relay_translations_late_total{stream="${s}"} ${n}`),
     '',
   ];
   res.type('text/plain; version=0.0.4').send(lines.join('\n'));
@@ -525,12 +758,87 @@ app.post('/api/v1/streams/:name/stop', requireToken, streamFromRequest, async (r
   try { res.json({ stream: await supervisor.stop(req.stream) }); }
   catch (err) { res.status(err.statusCode || 503).json({ error: err.message || 'unable to stop stream' }); }
 });
+/** Lifecycle state of a stream plus its last input probe (null when unknown). */
+const streamView = (name) => ({ ...supervisor.state(name), probe: probeService.get(name) });
 app.get('/api/v1/streams/:name/lifecycle', requireToken, streamFromRequest, (_req, res) => {
-  res.json({ stream: supervisor.state(_req.stream) });
+  res.json({ stream: streamView(_req.stream) });
 });
 app.get('/api/v1/streams/lifecycle', requireToken, (_req, res) => {
-  res.json({ streams: supervisor.list() });
+  res.json({ streams: supervisor.list().map((s) => ({ ...s, probe: probeService.get(s.name) })) });
 });
+// Must stay after /api/v1/streams/lifecycle above: "lifecycle" is a valid stream name.
+app.get('/api/v1/streams/:name', requireToken, streamFromRequest, (req, res) => {
+  res.json({ stream: streamView(req.stream) });
+});
+
+// ---------------------------------------------------------------------------
+// Egress destinations (P4.1, P4.3). Scope stream:<name>:control (admin passes).
+// Responses never contain a stream key; errors never contain one either.
+// ---------------------------------------------------------------------------
+const requireStreamControl = requireScope((req) => `stream:${req.params.name}:control`, { adminToken: RELAY_API_TOKEN, db });
+
+/** Maps errors from the destination helpers to a status; anything else is a 500 without details. */
+function destinationRoute(handler) {
+  return (req, res) => {
+    try {
+      handler(req, res);
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(err.statusCode).json({ error: err.message });
+        return;
+      }
+      console.error('[destinations]', err.name);
+      res.status(500).json({ error: 'internal error' });
+    }
+  };
+}
+
+app.get('/api/v1/streams/:name/destinations', requireStreamControl, streamFromRequest, destinationRoute((req, res) => {
+  const destinations = listDestinations(db, req.stream).map((d) => ({ ...d, state: egress.state(req.stream, d.id) }));
+  res.json({ stream: req.stream, destinations });
+}));
+
+app.post('/api/v1/streams/:name/destinations', requireStreamControl, streamFromRequest, destinationRoute((req, res) => {
+  const destination = createDestination(db, req.stream, req.body, {
+    secretKey: RELAY_SECRET_KEY, maxPerStream: MAX_DESTINATIONS_PER_STREAM, nowMs: Date.now(),
+  });
+  res.status(201).json({ destination: { ...destination, state: egress.state(req.stream, destination.id) } });
+}));
+
+app.patch('/api/v1/streams/:name/destinations/:id', requireStreamControl, streamFromRequest, destinationRoute((req, res) => {
+  const { destination, targetChanged } = updateDestination(db, req.stream, req.params.id, req.body, { secretKey: RELAY_SECRET_KEY });
+  // A running child keeps the url and key it was started with: stop it when those change.
+  if (targetChanged) egress.stop(req.stream, destination.id);
+  res.json({ destination: { ...destination, state: egress.state(req.stream, destination.id) } });
+}));
+
+app.delete('/api/v1/streams/:name/destinations/:id', requireStreamControl, streamFromRequest, destinationRoute((req, res) => {
+  if (!deleteDestination(db, req.stream, req.params.id)) {
+    res.status(404).json({ error: 'destination not found' });
+    return;
+  }
+  egress.stop(req.stream, req.params.id);
+  res.status(204).end();
+}));
+
+app.post('/api/v1/streams/:name/destinations/:id/start', requireStreamControl, streamFromRequest, destinationRoute((req, res) => {
+  const target = loadEgressTarget(db, req.stream, req.params.id, { secretKey: RELAY_SECRET_KEY });
+  if (!target.enabled) throw Object.assign(new Error('destination is disabled'), { statusCode: 409 });
+  res.json({ id: target.id, state: egress.start(req.stream, target) });
+}));
+
+app.post('/api/v1/streams/:name/destinations/:id/stop', requireStreamControl, streamFromRequest, destinationRoute((req, res) => {
+  if (!destinationExists(db, req.stream, req.params.id)) {
+    res.status(404).json({ error: 'destination not found' });
+    return;
+  }
+  res.json({ id: req.params.id, state: egress.stop(req.stream, req.params.id) });
+}));
+
+// ---------------------------------------------------------------------------
+// Recordings to S3 (P5.3). Scope stream:<name>:control (admin passes).
+// ---------------------------------------------------------------------------
+app.use(createRecordingRouter({ service: recordings, adminToken: RELAY_API_TOKEN, db }));
 
 // ---------------------------------------------------------------------------
 // GET /api/streams — every stream the relay knows about
@@ -581,6 +889,126 @@ app.get(['/api/streams/:name/hls/delayed.m3u8', '/api/hls/delayed.m3u8'], stream
 });
 
 // ---------------------------------------------------------------------------
+// Video HLS (P6.2, P6.3): delayed video playlist, WebVTT renditions and master.
+// The live video playlist is <HLS_DIR>/<stream>/video/stream.m3u8 (hls-args.js).
+// ---------------------------------------------------------------------------
+const VIDEO_SUB_LANGS = (process.env.VIDEO_SUB_LANGS || 'fi').split(',').map((s) => s.trim()).filter(Boolean);
+for (const lang of VIDEO_SUB_LANGS) {
+  if (!isSubtitleLang(lang)) throw new Error(`VIDEO_SUB_LANGS: invalid language tag "${lang}"`);
+}
+const VIDEO_BANDWIDTH = Number(process.env.VIDEO_BANDWIDTH || 2500000);
+const VIDEO_RESOLUTION = process.env.VIDEO_RESOLUTION || '1280x720';
+if (!Number.isInteger(VIDEO_BANDWIDTH) || VIDEO_BANDWIDTH <= 0) throw new Error('VIDEO_BANDWIDTH must be a positive integer');
+if (!/^\d+x\d+$/.test(VIDEO_RESOLUTION)) throw new Error('VIDEO_RESOLUTION must look like 1280x720');
+
+/** Wall-clock start of the first timed video segment seen per stream: the PTS origin of the WebVTT maps. */
+const videoOriginMs = new Map();
+
+/** Live video playlist of a stream with its parsed segments, or null when there is no video HLS. */
+function liveVideo(stream) {
+  let text;
+  try {
+    text = fs.readFileSync(path.join(HLS_DIR, stream, 'video', 'stream.m3u8'), 'utf8');
+  } catch {
+    return null;
+  }
+  const parsed = parseMediaPlaylist(text);
+  if (!videoOriginMs.has(stream)) {
+    const first = parsed.segments.find((s) => s.startMs != null);
+    if (first) videoOriginMs.set(stream, first.startMs);
+  }
+  return { text, parsed, originMs: videoOriginMs.get(stream) };
+}
+
+// GET /api/streams/:name/hls/master.m3u8 — subtitle renditions plus the delayed video
+app.get('/api/streams/:name/hls/master.m3u8', streamFromRequest, (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/vnd.apple.mpegurl').send(masterPlaylist({
+    stream: req.stream,
+    langs: VIDEO_SUB_LANGS,
+    bandwidth: VIDEO_BANDWIDTH,
+    resolution: VIDEO_RESOLUTION,
+  }));
+});
+
+// GET /api/streams/:name/hls/video/delayed.m3u8 — the delayed video playlist (as the audio one)
+app.get('/api/streams/:name/hls/video/delayed.m3u8', streamFromRequest, (req, res) => {
+  const live = liveVideo(req.stream);
+  if (live === null) {
+    res.status(404).type('text/plain').send('Video is not live\n');
+    return;
+  }
+  const body = buildDelayedPlaylist(live.text, {
+    delaySeconds: streams.delayOf(req.stream),
+    nowMs: Date.now(),
+    segmentPrefix: `${HLS_SEGMENT_PREFIX}${req.stream}/video/`,
+  });
+  if (body === null) {
+    res.status(503).type('text/plain').send('Stream timing is not available (ffmpeg needs program_date_time)\n');
+    return;
+  }
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/vnd.apple.mpegurl').send(body);
+});
+
+// GET /api/streams/:name/hls/subs/:lang.m3u8 — subtitle media playlist, one VTT per video segment
+app.get('/api/streams/:name/hls/subs/:lang.m3u8', streamFromRequest, (req, res) => {
+  const lang = req.params.lang;
+  if (!isSubtitleLang(lang)) return res.status(400).json({ error: 'invalid subtitle language' });
+  const live = liveVideo(req.stream);
+  if (live === null) {
+    res.status(404).type('text/plain').send('Video is not live\n');
+    return;
+  }
+  // Same window as the delayed video playlist, so the segments line up
+  const delayed = buildDelayedPlaylist(live.text, {
+    delaySeconds: streams.delayOf(req.stream),
+    nowMs: Date.now(),
+    segmentPrefix: `${HLS_SEGMENT_PREFIX}${req.stream}/video/`,
+  });
+  if (delayed === null) {
+    res.status(503).type('text/plain').send('Stream timing is not available (ffmpeg needs program_date_time)\n');
+    return;
+  }
+  const { header, segments } = parseMediaPlaylist(delayed);
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/vnd.apple.mpegurl').send(subsPlaylist({
+    stream: req.stream,
+    lang,
+    segments,
+    mediaSequence: header.mediaSequence,
+    targetDuration: header.targetDuration,
+  }));
+});
+
+// GET /api/streams/:name/hls/subs/:lang/:seq.vtt — captions of one video segment
+app.get('/api/streams/:name/hls/subs/:lang/:seq.vtt', streamFromRequest, (req, res) => {
+  const { lang, seq } = req.params;
+  if (!isSubtitleLang(lang)) return res.status(400).json({ error: 'invalid subtitle language' });
+  if (!/^\d+$/.test(seq)) return res.status(400).json({ error: 'seq must be an integer' });
+  const live = liveVideo(req.stream);
+  const segment = live && live.parsed.segments.find((s) => segmentSeq(s.uri) === Number(seq));
+  if (!segment || segment.startMs == null || segment.duration == null) {
+    return res.status(404).type('text/plain').send('Segment not found\n');
+  }
+  const segStartMs = segment.startMs;
+  const segEndMs = segStartMs + Math.round(segment.duration * 1000);
+  const events = rangeEvents(db, {
+    stream: req.stream,
+    fromMs: segStartMs - CUE_LOOKBACK_MS,
+    toMs: segEndMs,
+  });
+  res.set('Cache-Control', 'no-cache');
+  res.type('text/vtt; charset=utf-8').send(vttForSegment({
+    segStartMs,
+    segEndMs,
+    events,
+    lang,
+    originMs: live.originMs,
+  }));
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/streams/:name/captions and GET /api/captions — captions due now
 // ---------------------------------------------------------------------------
 app.get(['/api/streams/:name/captions', '/api/captions'], streamFromRequest, (req, res) => {
@@ -608,12 +1036,34 @@ app.get('/api/openapi.json', (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Image assets: upload per stream (scope stream:<name>:data, admin passes), public GET by id.
+// Registered before the catch-all stream redirect below.
+registerAssetRoutes(app, {
+  store: assetStore,
+  requireUpload: requireScope((req) => `stream:${req.params.name}:data`, { adminToken: RELAY_API_TOKEN, db }),
+});
+
 // GET /listen — the listener page: delayed audio plus captions in one view
 // ---------------------------------------------------------------------------
 app.get('/listen', (_req, res) => {
   res.set('Cache-Control', 'no-cache');
   res.type('html').sendFile(path.join(__dirname, 'public', 'listen.html'));
 });
+
+// Viewer pages (P7b): the church page, the caption embed and the watch player, plus their assets.
+// Registered before the /:stream catch-all below, or /watch would be taken for a stream name.
+const VIEWER_DIR = path.join(__dirname, 'public', 'viewer');
+app.use('/viewer', express.static(VIEWER_DIR, { maxAge: '5m' }));
+function viewerPage(file, keyOf) {
+  return (req, res) => {
+    if (!isValidStreamName(keyOf(req))) return res.status(404).send('Not Found');
+    res.set('Cache-Control', 'no-cache');
+    res.type('html').sendFile(path.join(VIEWER_DIR, file));
+  };
+}
+app.get('/view/:key', viewerPage('view.html', (req) => req.params.key));
+app.get('/embed/viewer', viewerPage('embed.html', (req) => String(req.query.key ?? '')));
+app.get('/watch', viewerPage('watch.html', (req) => String(req.query.stream ?? '')));
 
 // Root path redirects to /listen
 app.get('/', (_req, res) => {
@@ -639,7 +1089,79 @@ app.post(['/api/v1/streams/:name/captions', '/api/v1/captions'], requireToken, s
   if (!entry) return res.status(409).json({ error: 'too many streams' });
   const accepted = entry.captions.add(checked.segments);
   entry.captions.prune(nowMs - (entry.delaySeconds * 1000 + CAPTION_RETENTION_SECONDS * 1000));
+  // Bridge the legacy caption POST into the shared timeline so the live embedder and viewer see it too.
+  storeStreamEvents(req.stream, checked.segments.map((segment) => ({
+    type: 'caption', lang: segment.lang, startedAt: segment.startedAt, endedAt: segment.endedAt,
+    payload: { text: segment.text, final: true },
+  })), nowMs);
   res.status(202).json({ stream: req.stream, accepted });
+});
+
+// Timeline events pushed by a sender (P7.2): validated as a batch, stored with the event store.
+app.post('/api/v1/streams/:name/events', requireToken, streamFromRequest, (req, res) => {
+  const checked = validateEventBatch(req.body);
+  if (!checked.ok) return res.status(400).json({ error: checked.error });
+  const nowMs = Date.now();
+  const { added, deduped } = storeStreamEvents(req.stream, checked.events, nowMs);
+  res.status(202).json({ added, deduped });
+});
+
+// GET /api/v1/viewer/{key} — LCYT-compatible viewer SSE (plan P7.5). Public: no Bearer token, CORS *,
+// public rate limit. The key is the stream's viewerKey when it has one (P8), else the stream name, which
+// only works while the stream has no viewerKey.
+app.get('/api/v1/viewer/:key', mediaLimiter, (req, res) => {
+  const key = req.params.key;
+  if (!isValidStreamName(key) && !VIEWER_KEY.test(key)) {
+    return res.status(400).json({ error: 'Invalid viewer key: a viewer key (8-64 characters) or a stream name.' });
+  }
+  const stream = resolveViewerStream(db, key);
+  if (!stream) return res.status(404).json({ error: 'Unknown viewer key' });
+  const requested = req.query.mode === undefined ? 'live' : req.query.mode;
+  if (!VIEWER_MODES.includes(requested)) {
+    return res.status(400).json({ error: 'mode must be live or delayed' });
+  }
+  openViewerSession({
+    res,
+    db,
+    bus: eventBus,
+    stream,
+    mode: requested,
+    delayMsOf: () => streams.delayOf(stream) * 1000,
+  });
+});
+
+// Per-stream config (P8). Scope stream:<s>:control; the env admin token and admin tokens pass.
+
+app.get('/api/v1/streams/:name/config', requireStreamControl, streamFromRequest, (req, res) => {
+  res.json({ stream: req.stream, config: getConfig(db, req.stream) });
+});
+
+app.put('/api/v1/streams/:name/config', requireStreamControl, streamFromRequest, (req, res) => {
+  try {
+    const config = putConfig(db, req.stream, req.body ?? {}, Date.now());
+    res.json({ stream: req.stream, config });
+  } catch (err) {
+    if (err instanceof StreamConfigError) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+});
+
+// CEA-608 embedder configuration and runtime status (P9.6).
+app.get('/api/v1/streams/:name/captioner', requireStreamControl, streamFromRequest, (req, res) => {
+  const config = getConfig(db, req.stream).captioner;
+  res.json({ stream: req.stream, config, status: captionerService.state(req.stream) });
+});
+
+app.put('/api/v1/streams/:name/captioner', requireStreamControl, streamFromRequest, async (req, res) => {
+  try {
+    const stored = putConfig(db, req.stream, { captioner: req.body ?? {} }, Date.now());
+    const status = await captionerService.configure(req.stream, stored.captioner);
+    res.json({ stream: req.stream, config: stored.captioner, status });
+  } catch (err) {
+    if (err instanceof StreamConfigError) return res.status(err.status).json({ error: err.message });
+    if (err instanceof TypeError) return res.status(400).json({ error: err.message });
+    throw err;
+  }
 });
 
 app.get('/api/v1/captions/source', requireToken, (_req, res) => {
@@ -664,6 +1186,117 @@ app.put(['/api/v1/streams/:name/delay', '/api/v1/delay'], requireToken, streamFr
 // ---------------------------------------------------------------------------
 // GET /api/archive
 // ---------------------------------------------------------------------------
+// Scoped tokens (admin only). The env RELAY_API_TOKEN and stored admin tokens pass.
+const requireAdmin = requireScope(() => 'admin', { adminToken: RELAY_API_TOKEN, db });
+
+app.post('/api/v1/tokens', requireAdmin, (req, res) => {
+  const check = validateTokenRequest(req.body);
+  if (!check.ok) {
+    res.status(400).json({ error: check.error });
+    return;
+  }
+  const made = createToken(db, check.value, Date.now());
+  res.status(201).json({
+    id: made.id,
+    token: made.token,
+    scopes: made.scopes,
+    expiresAt: made.expiresAt,
+    label: made.label,
+  });
+});
+
+app.get('/api/v1/tokens', requireAdmin, (_req, res) => {
+  res.json({ tokens: listTokens(db) });
+});
+
+app.delete('/api/v1/tokens/:id', requireAdmin, (req, res) => {
+  if (!revokeToken(db, req.params.id, Date.now())) {
+    res.status(404).json({ error: 'Token not found' });
+    return;
+  }
+  res.status(204).end();
+});
+
+// ---------------------------------------------------------------------------
+// Internal hooks (MediaMTX and nginx-rtmp). nginx answers 404 for /internal/
+// from the public side; these are reached on the Docker network only.
+// ---------------------------------------------------------------------------
+
+/**
+ * Checks the hook secret given as `?secret=` or `x-hook-secret`. Returns null
+ * when it matches, else the status to answer: 503 (HOOK_SECRET unset) or 401.
+ */
+function hookSecretStatus(req) {
+  if (!HOOK_SECRET) return 503;
+  const given = [req.query.secret, req.get('x-hook-secret')].filter((v) => typeof v === 'string' && v.length > 0);
+  return given.some((g) => tokensEqual(g, HOOK_SECRET)) ? null : 401;
+}
+
+const lookupStoredToken = (token) => findTokenByValue(db, token);
+
+app.post('/internal/mediamtx/auth', (req, res) => {
+  const status = hookSecretStatus(req);
+  if (status) {
+    res.status(status).json({ error: status === 503 ? 'HOOK_SECRET is not set' : 'Unauthorized' });
+    return;
+  }
+  const body = req.body || {};
+  const result = decide(
+    {
+      action: body.action,
+      path: body.path,
+      query: body.query,
+      user: body.user,
+      password: body.password,
+      ip: body.ip,
+      protocol: body.protocol,
+    },
+    { lookupToken: lookupStoredToken, internalSecret: HOOK_SECRET, internalCidrs: RELAY_INTERNAL_CIDRS, nowMs: Date.now() },
+  );
+  res.status(result.allow ? 200 : 401).json(result);
+});
+
+// nginx-rtmp posts a form body (name, args, addr, ...). With PUBLISH_AUTH off,
+// every publish is allowed and the secret is not checked.
+app.post('/internal/publish-auth', express.urlencoded({ extended: false, limit: '16kb' }), (req, res) => {
+  if (!PUBLISH_AUTH_ON) {
+    res.status(200).end();
+    return;
+  }
+  const status = hookSecretStatus(req);
+  if (status) {
+    res.status(status).end();
+    return;
+  }
+  const body = req.body || {};
+  const name = typeof body.name === 'string' ? body.name : '';
+  const result = decide(
+    { action: 'publish', path: `live/${name}`, query: typeof body.args === 'string' ? body.args : '', ip: body.addr, protocol: 'rtmp' },
+    { lookupToken: lookupStoredToken, internalSecret: HOOK_SECRET, internalCidrs: RELAY_INTERNAL_CIDRS, nowMs: Date.now() },
+  );
+  res.status(result.allow ? 200 : 403).end();
+});
+
+// MediaMTX runOnReady / runOnNotReady (query `path`, secret as ?secret= or x-hook-secret).
+// Answers 200 for any valid path: MediaMTX does not retry, and failures are logged by the handler.
+app.post('/internal/mediamtx/ready', async (req, res) => {
+  const status = hookSecretStatus(req);
+  if (status) {
+    res.status(status).json({ error: status === 503 ? 'HOOK_SECRET is not set' : 'Unauthorized' });
+    return;
+  }
+  res.json(await readyHooks.ready(req.query.path));
+});
+
+app.post('/internal/mediamtx/notready', async (req, res) => {
+  const status = hookSecretStatus(req);
+  if (status) {
+    res.status(status).json({ error: status === 503 ? 'HOOK_SECRET is not set' : 'Unauthorized' });
+    return;
+  }
+  res.json(await readyHooks.notready(req.query.path));
+});
+
 app.get('/api/archive', (_req, res) => {
   let recordings = [];
 
@@ -869,7 +1502,8 @@ const server = app.listen(PORT, () => {
 });
 
 function shutdown() {
-  void Promise.allSettled([gatewayCaptions.stop(), supervisor.close()]).finally(() => server.close());
+  closeViewerSessions();
+  void Promise.allSettled([gatewayCaptions.stop(), supervisor.close(), egress.close(), hlsPackager.close(), recordings.close(), captionerService.close()]).finally(() => server.close(() => store.close()));
 }
 process.once('SIGTERM', shutdown);
 process.once('SIGINT', shutdown);
