@@ -8,6 +8,15 @@
 import { LANG } from './events.js';
 import { isValidStreamName } from './streams.js';
 
+const DEFAULT_CAPTION_HOLD_SECONDS = (() => {
+  const value = Number(process.env.CAPTION_HOLD_SECONDS);
+  return Number.isFinite(value) && value >= 1 && value <= 60 ? value : 16;
+})();
+const DEFAULT_CAPTION_SYNC_OFFSET_MS = (() => {
+  const value = Number(process.env.CAPTION_SYNC_OFFSET_MS);
+  return Number.isInteger(value) && value >= -10000 && value <= 10000 ? value : 1500;
+})();
+
 export const DEFAULT_CONFIG = Object.freeze({
   // '*' = every language that arrives (visitors pick their own on /view).
   visibleLanguages: Object.freeze(['*']),
@@ -16,7 +25,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   recordOnLive: false,
   publicGraphics: true,
   viewerKey: null,
-  captioner: Object.freeze({ enabled: false, lang: 'fi', holdSeconds: 16, syncOffsetMs: 1500 }),
+  captioner: Object.freeze({ enabled: false, lang: 'fi', holdSeconds: DEFAULT_CAPTION_HOLD_SECONDS, syncOffsetMs: DEFAULT_CAPTION_SYNC_OFFSET_MS }),
 });
 
 const KEYS = Object.keys(DEFAULT_CONFIG);
