@@ -236,14 +236,23 @@ const probeService = createProbeService({
   log: (msg) => console.log(`[probe] ${msg}`),
 });
 
+/** Captioner probes its raw MediaMTX input independently of the optional radio pull URL. */
+const CAPTIONER_RTSP_BASE = process.env.MEDIAMTX_RTSP_BASE || DEFAULT_RTSP_BASE;
+const CAPTIONER_RTMP_BASE = process.env.MEDIAMTX_RTMP_BASE || 'rtmp://mediamtx:1935';
+const captionerProbeService = createProbeService({
+  spawnProcess: spawn,
+  urlFor: (name) => `${CAPTIONER_RTSP_BASE.replace(/\\/+$/, '')}/live/${name}`,
+  log: (msg) => console.log(`[captioner-probe] ${msg}`),
+});
+
 /** Live CEA-608 embedder: raw RTSP -> FLV/Node SEI edit -> captioned RTMP variant. */
 const captionerService = createCaptionerService({
   spawnProcess: spawn,
-  getProbe: (name) => probeService.get(name),
-  probe: (name) => probeService.probe(name),
+  getProbe: (name) => captionerProbeService.get(name),
+  probe: (name) => captionerProbeService.probe(name),
   bus: eventBus,
-  rtspBase: process.env.MEDIAMTX_RTSP_BASE || DEFAULT_RTSP_BASE,
-  rtmpBase: process.env.MEDIAMTX_RTMP_BASE || 'rtmp://mediamtx:1935',
+  rtspBase: CAPTIONER_RTSP_BASE,
+  rtmpBase: CAPTIONER_RTMP_BASE,
   secret: HOOK_SECRET,
   defaultHoldSeconds: Number(process.env.CAPTION_HOLD_SECONDS) || 16,
   defaultSyncOffsetMs: Number(process.env.CAPTION_SYNC_OFFSET_MS ?? 1500),
