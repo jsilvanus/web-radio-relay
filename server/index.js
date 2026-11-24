@@ -35,7 +35,7 @@
  *   DELETE /api/v1/streams/{s}/destinations/{id}       remove a destination (stops its egress)
  *   POST   /api/v1/streams/{s}/destinations/{id}/start start one egress child
  *   POST   /api/v1/streams/{s}/destinations/{id}/stop  stop one egress child
- *   GET  /api/v1/streams/{s}/config  per-stream config (scope stream:<s>:control)
+ *   GET  /api/v1/streams/{s}/captioner  CEA-608 embedder status and config (scope stream:<s>:control)\n *   PUT  /api/v1/streams/{s}/captioner  configure/start/stop the CEA-608 embedder\n *   GET  /api/v1/streams/{s}/config  per-stream config (scope stream:<s>:control)
  *   PUT  /api/v1/streams/{s}/config  set part of it: visibleLanguages, radio, videoHls, recordOnLive, publicGraphics, viewerKey
  *   POST   /api/v1/streams/{s}/recordings             start recording the stream to S3 (202, needs S3)
  *   DELETE /api/v1/streams/{s}/recordings/current     stop it: uploads the rest, writes session.json
@@ -111,6 +111,7 @@ import { isValidStreamName, StreamRegistry } from './lib/streams.js';
 import { StreamSupervisor } from './lib/stream-supervisor.js';
 import { createReadyHandler } from './lib/ready-hooks.js';
 import { createProbeService } from './lib/probe-service.js';
+import { createCaptionerService } from './lib/captioner-service.js';
 import { GatewayCaptions } from './lib/gateway-captions.js';
 import { createGatewayMapper } from './lib/gateway-map.js';
 import { addEvents, rangeEvents, eventsAfterId, maxEventId } from './lib/event-store.js';
@@ -232,6 +233,20 @@ const probeService = createProbeService({
   urlFor: (name) => RADIO_SOURCE_URL_TEMPLATE.replaceAll('{name}', name),
   log: (msg) => console.log(`[probe] ${msg}`),
 });
+
+/** Live CEA-608 embedder: raw RTSP -> FLV/Node SEI edit -> captioned RTMP variant. */
+const captionerService = createCaptionerService({
+  spawnProcess: spawn,
+  getProbe: (name) => probeService.get(name),
+  probe: (name) => probeService.probe(name),
+  bus: eventBus,
+  rtspBase: process.env.MEDIAMTX_RTSP_BASE || DEFAULT_RTSP_BASE,
+  rtmpBase: process.env.MEDIAMTX_RTMP_BASE || 'rtmp://mediamtx:1935',
+  secret: HOOK_SECRET,
+  defaultHoldSeconds: Number(process.env.CAPTION_HOLD_SECONDS) || 16,
+  defaultSyncOffsetMs: Number(process.env.CAPTION_SYNC_OFFSET_MS ?? 1500),
+  log: (msg) => console.log(`[captioner] ${msg}`),
+});
 /** Secret key (64 hex) that seals destination stream keys at rest. Unset = keys cannot be stored (503). */
 const RELAY_SECRET_KEY = process.env.RELAY_SECRET_KEY || '';
 /** Most destinations one stream may have (P4.1). */
@@ -295,6 +310,7 @@ const readyHooks = createReadyHandler({
   recordings,
   s3Configured: Boolean(s3Client),
   getConfig: (name) => getConfig(db, name),
+  captioner: captionerService,
 });
 
 /** Email provider: 'sendgrid' | 'mailgun' | '' (disabled) */
@@ -1103,6 +1119,24 @@ app.put('/api/v1/streams/:name/config', requireStreamControl, streamFromRequest,
     res.json({ stream: req.stream, config });
   } catch (err) {
     if (err instanceof StreamConfigError) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+});
+
+// CEA-608 embedder configuration and runtime status (P9.6).
+app.get('/api/v1/streams/:name/captioner', requireStreamControl, streamFromRequest, (req, res) => {
+  const config = getConfig(db, req.stream).captioner;
+  res.json({ stream: req.stream, config, status: captionerService.state(req.stream) });
+});
+
+app.put('/api/v1/streams/:name/captioner', requireStreamControl, streamFromRequest, (req, res) => {
+  try {
+    const stored = putConfig(db, req.stream, { captioner: req.body ?? {} }, Date.now());
+    const status = captionerService.configure(req.stream, stored.captioner);
+    res.json({ stream: req.stream, config: stored.captioner, status });
+  } catch (err) {
+    if (err instanceof StreamConfigError) return res.status(err.status).json({ error: err.message });
+    if (err instanceof TypeError) return res.status(400).json({ error: err.message });
     throw err;
   }
 });
