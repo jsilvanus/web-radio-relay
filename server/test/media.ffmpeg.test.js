@@ -306,6 +306,8 @@ test('captioner: real ffmpeg FLV round trip exposes 608 text at the scheduled PT
 
     const scheduler = createCaptioner({ fps: 25 });
     scheduler.addCaption({ text: 'Hei maailma', startedAtMs: 2000, endedAtMs: 6000 });
+    // A following cue lets FFmpeg's fix_sub_duration close and flush the first SRT packet.
+    scheduler.addCaption({ text: 'Toinen teksti', startedAtMs: 6500, endedAtMs: 7500 });
     const parser = createFlvParser();
     const output = [];
     for (const item of parser.push(readFileSync(sourceFile))) {
@@ -327,7 +329,7 @@ test('captioner: real ffmpeg FLV round trip exposes 608 text at the scheduled PT
       }
       output.push(writeTag({ ...item, data }));
     }
-    assert.equal(scheduler.stats().embedded, 1, 'the scheduler emitted one EOC');
+    assert.equal(scheduler.stats().embedded, 2, 'the scheduler emitted both EOCs');
     const embeddedItems = createFlvParser().push(Buffer.concat(output));
     const embeddedPairs = embeddedItems
       .filter((item) => item.kind === 'tag' && item.type === TAG_VIDEO)
