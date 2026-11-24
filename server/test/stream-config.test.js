@@ -33,6 +33,7 @@ test('defaults are the P8 values', () => {
     recordOnLive: false,
     publicGraphics: true,
     viewerKey: null,
+    captioner: { enabled: false, lang: 'fi', holdSeconds: 16, syncOffsetMs: 1500 },
   });
   assert.equal(Object.isFrozen(DEFAULT_CONFIG), true);
 });
@@ -53,6 +54,11 @@ const invalid = [
   ['viewerKey with capitals', { viewerKey: 'ABCDEFGHIJ' }, /viewerKey must be null or 8-64/],
   ['viewerKey too long', { viewerKey: 'a'.repeat(65) }, /viewerKey must be null or 8-64/],
   ['viewerKey not a string', { viewerKey: 12345678 }, /viewerKey must be null or 8-64/],
+  ['captioner not an object', { captioner: true }, /captioner must be an object/],
+  ['captioner unknown field', { captioner: { enabled: true, secret: 'x' } }, /unknown captioner field/],
+  ['captioner invalid language', { captioner: { lang: 'Finnish' } }, /captioner.lang/],
+  ['captioner hold too short', { captioner: { holdSeconds: 0 } }, /holdSeconds/],
+  ['captioner sync offset out of range', { captioner: { syncOffsetMs: 20000 } }, /syncOffsetMs/],
 ];
 
 for (const [name, patch, pattern] of invalid) {
@@ -70,6 +76,7 @@ const valid = [
   ['booleans', { radio: false, videoHls: true, recordOnLive: true, publicGraphics: false }, { radio: false, videoHls: true, recordOnLive: true, publicGraphics: false }],
   ['viewerKey set', { viewerKey: 'sunnuntai_2026-a' }, { viewerKey: 'sunnuntai_2026-a' }],
   ['viewerKey cleared', { viewerKey: null }, { viewerKey: null }],
+  ['captioner partial patch receives defaults', { captioner: { enabled: true, lang: 'SV' } }, { captioner: { enabled: true, lang: 'sv', holdSeconds: 16, syncOffsetMs: 1500 } }],
 ];
 
 for (const [name, patch, expected] of valid) {
@@ -83,7 +90,9 @@ test('getConfig: a stream without a row has the defaults, and arrays are copies'
     const config = getConfig(db, 'church');
     assert.deepEqual(config, DEFAULT_CONFIG);
     config.visibleLanguages.push('sv');
+    config.captioner.enabled = true;
     assert.deepEqual(getConfig(db, 'church').visibleLanguages, ['*']);
+    assert.equal(getConfig(db, 'church').captioner.enabled, false);
   });
 });
 
