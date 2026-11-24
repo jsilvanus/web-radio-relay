@@ -347,7 +347,7 @@ test('captioner: real ffmpeg FLV round trip exposes 608 text at the scheduled PT
 
     // FFmpeg's movie filter exposes the A/53 captions as its subcc output pad.
     const extract = spawnFfmpeg([
-      ...LOG,
+      ...LOG, '-fix_sub_duration',
       '-f', 'lavfi', '-i', `movie=filename=${remuxedFile}[out0+subcc]`,
       '-map', '0:s', '-c:s', 'srt', '-f', 'srt', subtitlesFile,
     ]);
