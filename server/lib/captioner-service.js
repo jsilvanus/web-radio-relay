@@ -81,13 +81,14 @@ export function createCaptionerService({
   if (!bus || typeof bus.subscribe !== 'function') throw new TypeError('event bus is required');
   const sessions = new Map();
   const active = new Map();
+  const live = new Set();
 
   const urlFor = (base, path) => `${base.replace(/\/$/, '')}/${path}`;
 
   function state(stream) {
     const session = sessions.get(stream);
     if (!session) return {
-      stream, state: active.get(stream)?.enabled ? 'waiting' : 'off', running: false,
+      stream, state: live.has(stream) && active.get(stream)?.enabled ? 'waiting' : 'off', running: false,
       holdSeconds: active.get(stream)?.holdSeconds ?? defaultHoldSeconds,
       captionsEmbedded: 0, lateCount: 0, replacedCharacters: 0, error: null,
     };
@@ -265,6 +266,7 @@ export function createCaptionerService({
   async function ready(stream, configValue) {
     const config = checkedConfig(configValue);
     active.set(stream, config);
+    live.add(stream);
     if (!config.enabled) return state(stream);
     let probeInfo = getProbe(stream);
     if ((!probeInfo?.video || !frameRate(probeInfo)) && typeof probe === 'function') {
@@ -276,12 +278,15 @@ export function createCaptionerService({
   function configure(stream, configValue) {
     const config = checkedConfig(configValue);
     active.set(stream, config);
-    if (sessions.has(stream) && sessions.get(stream).state !== 'off') return start(stream, config);
-    if (!config.enabled) stop(stream, 'disabled');
+    if (live.has(stream)) {
+      if (config.enabled) return start(stream, config);
+      stop(stream, 'disabled');
+    }
     return state(stream);
   }
 
   function notready(stream) {
+    live.delete(stream);
     active.delete(stream);
     return stop(stream, 'source not ready');
   }
@@ -289,6 +294,7 @@ export function createCaptionerService({
   function close() {
     for (const stream of [...sessions.keys()]) stop(stream, 'service shutdown');
     active.clear();
+    live.clear();
   }
 
   return { ready, notready, configure, start, stop, state, close };
