@@ -142,7 +142,7 @@ export function createReadyHandler({
     try {
       const result = await captioner.ready(stream, config.captioner || { enabled: false });
       if (result?.state === 'failed') failed.push('captioner');
-      return result?.state || 'unknown';
+      return !result || result.state === 'off' ? 'ignored' : result.state || 'unknown';
     } catch (err) {
       log('ready ' + stream + ': captioner start failed: ' + describe(err));
       failed.push('captioner');
@@ -153,8 +153,9 @@ export function createReadyHandler({
   function stopCaptioner(stream, failed) {
     if (!captioner) return 'ignored';
     try {
+      const before = typeof captioner.state === 'function' ? captioner.state(stream) : null;
       const result = captioner.notready(stream);
-      return result?.state || 'stop';
+      return before?.state === 'off' ? 'ignored' : result?.state || 'stop';
     } catch (err) {
       log('notready ' + stream + ': captioner stop failed: ' + describe(err));
       failed.push('captioner');
@@ -242,7 +243,7 @@ export function createReadyHandler({
 
       const started = radio === 'start' || destinations > 0 || hlsState === 'start' || recording === 'start' || captionerState === 'running';
       const action = failed.length ? 'error' : started ? 'start' : 'ignored';
-      return { action, stream, radio, destinations, hls: hlsState, recording, ...(captioner ? { captioner: captionerState } : {}), failed };
+      return { action, stream, radio, destinations, hls: hlsState, recording, ...(captionerState !== 'ignored' ? { captioner: captionerState } : {}), failed };
     },
 
     /**
