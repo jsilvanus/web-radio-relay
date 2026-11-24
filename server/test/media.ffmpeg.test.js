@@ -320,7 +320,7 @@ test('captioner: real ffmpeg FLV round trip exposes 608 text at the scheduled PT
           const ptsMs = item.timestamp + video.compositionTime;
           data = embedCaptionFrame({
             data, timestamp: item.timestamp, scheduler, fps: 25,
-            wallTimeMs: ptsMs, syncOffsetMs: 0,
+            wallTimeMs: item.timestamp, syncOffsetMs: 0,
           });
         }
       }
