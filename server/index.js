@@ -1497,7 +1497,7 @@ const server = app.listen(PORT, () => {
 
 function shutdown() {
   closeViewerSessions();
-  void Promise.allSettled([gatewayCaptions.stop(), supervisor.close(), egress.close(), hlsPackager.close(), recordings.close()]).finally(() => server.close(() => store.close()));
+  void Promise.allSettled([gatewayCaptions.stop(), supervisor.close(), egress.close(), hlsPackager.close(), recordings.close(), captionerService.close()]).finally(() => server.close(() => store.close()));
 }
 process.once('SIGTERM', shutdown);
 process.once('SIGINT', shutdown);
