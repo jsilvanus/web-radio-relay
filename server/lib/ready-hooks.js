@@ -255,11 +255,10 @@ export function createReadyHandler({
       const { stream } = hook;
       probe.clear(stream);
 
-      const captionerState = stopCaptioner(stream, []);
+      const failed = [];
+      const captionerState = stopCaptioner(stream, failed);
       const radio = await radioStop(stream);
       if (!extended) return radio === 'error' ? { action: 'error', stream } : { action: 'stop', stream };
-
-      const failed = [];
       if (radio === 'error') failed.push('radio');
 
       let destinations = 0;
