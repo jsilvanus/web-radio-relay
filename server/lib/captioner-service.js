@@ -283,11 +283,17 @@ export function createCaptionerService({
     return start(stream, config);
   }
 
-  function configure(stream, configValue) {
+  async function configure(stream, configValue) {
     const config = checkedConfig(configValue);
     active.set(stream, config);
     if (live.has(stream)) {
-      if (config.enabled) return start(stream, config);
+      if (config.enabled) {
+        const probeInfo = getProbe(stream);
+        if ((!probeInfo?.video || !frameRate(probeInfo)) && typeof probe === 'function') {
+          try { await probe(stream); } catch { /* start() returns the useful status */ }
+        }
+        return start(stream, config);
+      }
       stop(stream, 'disabled');
     }
     return state(stream);
