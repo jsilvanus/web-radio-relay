@@ -443,6 +443,36 @@ export const operations = [
     ]
   },
   {
+    "operationId": "getStreamCaptioner",
+    "method": "GET",
+    "path": "/api/v1/streams/{name}/captioner",
+    "summary": "Read CEA-608 captioner configuration and status",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "setStreamCaptioner",
+    "method": "PUT",
+    "path": "/api/v1/streams/{name}/captioner",
+    "summary": "Configure the CEA-608 captioner",
+    "bearer": true,
+    "body": "application/json",
+    "parameters": [
+      {
+        "name": "name",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
     "operationId": "getStreamConfig",
     "method": "GET",
     "path": "/api/v1/streams/{name}/config",
