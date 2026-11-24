@@ -141,9 +141,51 @@
           }
         }
       },
+      "CaptionerConfig": {
+        "type": "object",
+        "required": ["enabled", "lang", "holdSeconds", "syncOffsetMs"],
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "lang": { "type": "string", "pattern": "^[a-z]{2,3}(-[a-z0-9]{1,8})*$", "default": "fi" },
+          "holdSeconds": { "type": "number", "minimum": 1, "maximum": 60, "default": 16 },
+          "syncOffsetMs": { "type": "integer", "minimum": -10000, "maximum": 10000, "default": 1500 }
+        }
+      },
+      "CaptionerConfigPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "lang": { "type": "string", "pattern": "^[a-z]{2,3}(-[a-z0-9]{1,8})*$" },
+          "holdSeconds": { "type": "number", "minimum": 1, "maximum": 60 },
+          "syncOffsetMs": { "type": "integer", "minimum": -10000, "maximum": 10000 }
+        }
+      },
+      "CaptionerResponse": {
+        "type": "object",
+        "required": ["stream", "config", "status"],
+        "properties": {
+          "stream": { "type": "string" },
+          "config": { "$ref": "#/components/schemas/CaptionerConfig" },
+          "status": {
+            "type": "object",
+            "properties": {
+              "state": { "type": "string", "enum": ["off", "waiting", "starting", "running", "failed"] },
+              "running": { "type": "boolean" },
+              "holdSeconds": { "type": "number" },
+              "captionsEmbedded": { "type": "integer" },
+              "lateCount": { "type": "integer" },
+              "lateMsMax": { "type": "number" },
+              "replacedCharacters": { "type": "integer" },
+              "pendingCaptions": { "type": "integer" },
+              "error": { "type": ["string", "null"] }
+            }
+          }
+        }
+      },
       "StreamConfig": {
         "type": "object",
-        "required": ["visibleLanguages", "radio", "videoHls", "recordOnLive", "publicGraphics", "viewerKey"],
+        "required": ["visibleLanguages", "radio", "videoHls", "recordOnLive", "publicGraphics", "viewerKey", "captioner"],
         "properties": {
           "visibleLanguages": {
             "type": "array",
@@ -160,7 +202,8 @@
             "type": ["string", "null"],
             "pattern": "^[a-z0-9_-]{8,64}$",
             "description": "Key for /api/v1/viewer/{viewerKey}, or null (the stream name opens the viewer). Default null."
-          }
+          },
+          "captioner": { "$ref": "#/components/schemas/CaptionerConfig" }
         }
       },
       "StreamConfigPatch": {
@@ -173,7 +216,8 @@
           "videoHls": { "type": "boolean" },
           "recordOnLive": { "type": "boolean" },
           "publicGraphics": { "type": "boolean" },
-          "viewerKey": { "type": ["string", "null"], "pattern": "^[a-z0-9_-]{8,64}$" }
+          "viewerKey": { "type": ["string", "null"], "pattern": "^[a-z0-9_-]{8,64}$" },
+          "captioner": { "$ref": "#/components/schemas/CaptionerConfigPatch" }
         }
       },
       "StreamConfigResponse": {
@@ -2135,6 +2179,45 @@
           "401": {
             "description": "Missing or wrong token"
           }
+        }
+      }
+    },
+    "/api/v1/streams/{name}/captioner": {
+      "get": {
+        "operationId": "getStreamCaptioner",
+        "summary": "Read CEA-608 captioner configuration and status",
+        "description": "Scope stream:<name>:control (the admin token passes). Status is runtime-only; configuration persists per stream.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{
+          "name": "name", "in": "path", "required": true,
+          "description": "Stream name, a-z 0-9 _ - up to 32 characters.",
+          "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" }
+        }],
+        "responses": {
+          "200": { "description": "Captioner configuration and runtime status", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CaptionerResponse" } } } },
+          "401": { "description": "Missing, wrong or expired token" },
+          "403": { "description": "Token lacks stream:<name>:control" }
+        }
+      },
+      "put": {
+        "operationId": "setStreamCaptioner",
+        "summary": "Configure the CEA-608 captioner",
+        "description": "Partial updates are accepted. Enabling while the source is live starts the copy-only FFmpeg/FLV embedder; disabling stops it. holdSeconds is the wall-clock media hold, syncOffsetMs adjusts the sender/relay clock alignment.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{
+          "name": "name", "in": "path", "required": true,
+          "description": "Stream name, a-z 0-9 _ - up to 32 characters.",
+          "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" }
+        }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CaptionerConfigPatch" } } }
+        },
+        "responses": {
+          "200": { "description": "Updated configuration and runtime status", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CaptionerResponse" } } } },
+          "400": { "description": "Invalid captioner configuration" },
+          "401": { "description": "Missing, wrong or expired token" },
+          "403": { "description": "Token lacks stream:<name>:control" }
         }
       }
     },
