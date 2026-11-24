@@ -242,7 +242,7 @@ export function createReadyHandler({
 
       const started = radio === 'start' || destinations > 0 || hlsState === 'start' || recording === 'start' || captionerState === 'running';
       const action = failed.length ? 'error' : started ? 'start' : 'ignored';
-      return { action, stream, radio, destinations, hls: hlsState, recording, captioner: captionerState, failed };
+      return { action, stream, radio, destinations, hls: hlsState, recording, ...(captioner ? { captioner: captionerState } : {}), failed };
     },
 
     /**
