@@ -335,6 +335,16 @@ test('captioner: real ffmpeg FLV round trip exposes 608 text at the scheduled PT
     const remuxed = await finish(remux);
     assert.equal(remuxed.code, 0, remuxed.stderr);
 
+    const probed = spawnSync('ffprobe', [
+      '-v', 'error', '-select_streams', 'v:0', '-show_frames',
+      '-show_entries', 'frame=pts_time,side_data_list', '-of', 'json', remuxedFile,
+    ], { encoding: 'utf8' });
+    assert.equal(probed.status, 0, probed.stderr);
+    const decodedFrames = JSON.parse(probed.stdout).frames || [];
+    const a53Frames = decodedFrames.filter((frame) =>
+      (frame.side_data_list || []).some((side) => /A53/i.test(side.side_data_type || '')));
+    assert.ok(a53Frames.length > 0, 'ffprobe decoder exposes A/53 side data from the inserted SEI');
+
     // FFmpeg's movie filter exposes the A/53 captions as its subcc output pad.
     const extract = spawnFfmpeg([
       ...LOG,
