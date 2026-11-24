@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,6 +19,9 @@ import { hlsArgs } from '../lib/hls-args.js';
 import { recorderArgs, closedSegments } from '../lib/recorder-args.js';
 import { buildDelayedPlaylist, parseMediaPlaylist } from '../lib/hls-delay.js';
 import { vttForSegment, mpegtsForSegment } from '../lib/vtt-segments.js';
+import { createFlvParser, parseVideoTag, writeFlvHeader, writeTag, TAG_VIDEO, AVC_NALU } from '../lib/flv.js';
+import { createCaptioner } from '../lib/captioner.js';
+import { embedCaptionFrame } from '../lib/captioner-service.js';
 
 const hasFfmpeg = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
 const hasFfprobe = spawnSync('ffprobe', ['-version'], { stdio: 'ignore' }).status === 0;
@@ -274,6 +277,77 @@ test('recorder: the live source is recorded as closed fragmented MP4 segments', 
     assert.ok(info.format.format_name.includes('mp4'), `ffprobe reads it as MP4 (${info.format.format_name})`);
     assert.ok(Number(info.format.duration) > 0, 'segment has a duration');
     assert.deepEqual(info.streams.map((s) => s.codec_type).sort(), ['audio', 'video']);
+  } finally {
+    killAll(procs);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('captioner: real ffmpeg FLV round trip exposes 608 text at the scheduled PTS (±1 frame)', { skip: SKIP, timeout: 90000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'relay-captioner-ff-'));
+  const procs = [];
+  try {
+    const sourceFile = join(dir, 'source.flv');
+    const embeddedFile = join(dir, 'embedded.flv');
+    const subtitlesFile = join(dir, 'captions.srt');
+    const source = spawnFfmpeg([
+      ...LOG,
+      '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=25',
+      '-f', 'lavfi', '-i', 'sine=frequency=440',
+      '-t', '8', '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-f', 'flv', sourceFile,
+    ]);
+    procs.push(source);
+    const generated = await finish(source);
+    assert.equal(generated.code, 0, generated.stderr);
+
+    const scheduler = createCaptioner({ fps: 25 });
+    scheduler.addCaption({ text: 'Hei maailma', startedAtMs: 2000, endedAtMs: 6000 });
+    const parser = createFlvParser();
+    const output = [];
+    for (const item of parser.push(readFileSync(sourceFile))) {
+      if (item.kind === 'header') {
+        output.push(writeFlvHeader({
+          audio: item.audio, video: item.video, version: item.version, dataOffset: item.dataOffset,
+        }));
+        continue;
+      }
+      let data = item.data;
+      if (item.type === TAG_VIDEO) {
+        const video = parseVideoTag(data);
+        if (video.codecId === 7 && video.avcPacketType === AVC_NALU) {
+          const ptsMs = item.timestamp + video.compositionTime;
+          data = embedCaptionFrame({
+            data, timestamp: item.timestamp, scheduler, fps: 25,
+            wallTimeMs: ptsMs, syncOffsetMs: 0,
+          });
+        }
+      }
+      output.push(writeTag({ ...item, data }));
+    }
+    assert.equal(scheduler.stats().embedded, 1, 'the scheduler emitted one EOC');
+    writeFileSync(embeddedFile, Buffer.concat(output));
+
+    // FFmpeg's movie filter exposes the A/53 captions as its subcc output pad.
+    const extract = spawnFfmpeg([
+      ...LOG,
+      '-f', 'lavfi', '-i', `movie=filename=${embeddedFile}[out0+subcc]`,
+      '-map', '0:s:0', '-c:s', 'srt', '-f', 'srt', subtitlesFile,
+    ]);
+    procs.push(extract);
+    const extracted = await finish(extract);
+    assert.equal(extracted.code, 0, extracted.stderr);
+    assert.ok(existsSync(subtitlesFile), 'FFmpeg extracted an SRT caption track');
+    const srt = readFileSync(subtitlesFile, 'utf8');
+    assert.match(srt, /Hei\\s+maailma/i, 'decoded text matches the caption sent to the scheduler');
+    const cue = /(\\d{2}):(\\d{2}):(\\d{2}),(\\d{3}) --> (\\d{2}):(\\d{2}):(\\d{2}),(\\d{3})/.exec(srt);
+    assert.ok(cue, 'FFmpeg produced a timed subtitle cue');
+    const toMs = (h, m, s, ms) => (((Number(h) * 60 + Number(m)) * 60 + Number(s)) * 1000) + Number(ms);
+    const startMs = toMs(cue[1], cue[2], cue[3], cue[4]);
+    const endMs = toMs(cue[5], cue[6], cue[7], cue[8]);
+    assert.ok(Math.abs(startMs - 2000) <= 40, `caption starts at ${startMs} ms, expected 2000 ± 40 ms`);
+    assert.ok(Math.abs(endMs - 6000) <= 40, `caption ends at ${endMs} ms, expected 6000 ± 40 ms`);
   } finally {
     killAll(procs);
     rmSync(dir, { recursive: true, force: true });
