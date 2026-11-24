@@ -16,11 +16,13 @@ export const DEFAULT_CONFIG = Object.freeze({
   recordOnLive: false,
   publicGraphics: true,
   viewerKey: null,
+  captioner: Object.freeze({ enabled: false, lang: 'fi', holdSeconds: 16, syncOffsetMs: 1500 }),
 });
 
 const KEYS = Object.keys(DEFAULT_CONFIG);
 const BOOLEAN_KEYS = ['radio', 'videoHls', 'recordOnLive', 'publicGraphics'];
 const MAX_LANGUAGES = 10;
+const CAPTIONER_KEYS = ['enabled', 'lang', 'holdSeconds', 'syncOffsetMs'];
 /** A viewer key is an operator-chosen path segment: 8 to 64 characters. */
 export const VIEWER_KEY = /^[a-z0-9_-]{8,64}$/;
 
@@ -34,6 +36,29 @@ export class StreamConfigError extends Error {
 }
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+function checkCaptioner(value) {
+  if (!isPlainObject(value)) return { ok: false, error: 'captioner must be an object' };
+  const out = {};
+  for (const key of Object.keys(value)) {
+    if (!CAPTIONER_KEYS.includes(key)) return { ok: false, error: 'unknown captioner field: ' + key.slice(0, 64) };
+    const v = value[key];
+    if (key === 'enabled') {
+      if (typeof v !== 'boolean') return { ok: false, error: 'captioner.enabled must be true or false' };
+      out.enabled = v;
+    } else if (key === 'lang') {
+      if (typeof v !== 'string' || !LANG.test(v.trim().toLowerCase())) return { ok: false, error: 'captioner.lang must be a language tag' };
+      out.lang = v.trim().toLowerCase();
+    } else if (key === 'holdSeconds') {
+      if (!Number.isFinite(v) || v < 1 || v > 60) return { ok: false, error: 'captioner.holdSeconds must be a number 1-60' };
+      out.holdSeconds = v;
+    } else if (key === 'syncOffsetMs') {
+      if (!Number.isInteger(v) || v < -10000 || v > 10000) return { ok: false, error: 'captioner.syncOffsetMs must be an integer -10000..10000' };
+      out.syncOffsetMs = v;
+    }
+  }
+  return { ok: true, value: out };
+}
 
 function checkLanguages(value) {
   if (!Array.isArray(value) || value.length < 1 || value.length > MAX_LANGUAGES) {
@@ -68,7 +93,11 @@ export function validateConfigPatch(patch) {
   for (const key of Object.keys(patch)) {
     if (!KEYS.includes(key)) return { ok: false, error: `unknown config field: ${key.slice(0, 64)}` };
     const v = patch[key];
-    if (key === 'visibleLanguages') {
+    if (key === 'captioner') {
+      const checked = checkCaptioner(v);
+      if (!checked.ok) return checked;
+      value[key] = { ...DEFAULT_CONFIG.captioner, ...checked.value };
+    } else if (key === 'visibleLanguages') {
       const checked = checkLanguages(v);
       if (!checked.ok) return checked;
       value[key] = checked.value;
@@ -109,6 +138,7 @@ export function getConfig(db, stream) {
   const checked = validateConfigPatch(storedFields(db, stream));
   const merged = { ...DEFAULT_CONFIG, ...(checked.ok ? checked.value : {}) };
   merged.visibleLanguages = [...merged.visibleLanguages];
+  merged.captioner = { ...DEFAULT_CONFIG.captioner, ...(merged.captioner || {}) };
   return merged;
 }
 
