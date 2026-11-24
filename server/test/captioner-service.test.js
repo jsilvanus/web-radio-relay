@@ -56,28 +56,31 @@ test('P9.6 starts two copy-only FFmpeg children and publishes the protected -cc 
     assert.match(spawned[1].args.at(-1), /live\/church-cc\?secret=unit-test-secret/);
 
     subscriber([{
-      type: 'caption', lang: 'fi', startedAt: 10_000, endedAt: 12_000,
+      type: 'caption', lang: 'fi', startedAt: 12_000, endedAt: 14_000,
       payload: { text: 'Hei maailma', final: true },
     }]);
     // A non-final partial must not enter the scheduler.
     subscriber([{
-      type: 'caption', lang: 'fi', startedAt: 10_000, endedAt: 12_000,
+      type: 'caption', lang: 'fi', startedAt: 12_000, endedAt: 14_000,
       payload: { text: 'osittainen', final: false },
     }]);
 
-    const video = buildVideoTag({
-      frameType: 1, codecId: 7, avcPacketType: 1, compositionTime: 0,
-      nalus: [Buffer.from([0x65, 0x88, 0x84])],
-    });
-    const flv = Buffer.concat([
-      writeFlvHeader({ audio: true, video: true }),
-      writeTag({ type: TAG_VIDEO, timestamp: 0, data: video }),
-    ]);
-    spawned[0].child.stdout.write(flv);
+    spawned[0].child.stdout.write(writeFlvHeader({ audio: true, video: true }));
+    // Two and a half seconds of 25 fps video. The caption starts at 2 s, so
+    // the scheduler has enough held frames to load its pop-on before the EOC.
+    for (let frame = 0; frame <= 60; frame += 1) {
+      const timestamp = frame * 40;
+      clock = 10_000 + timestamp;
+      const video = buildVideoTag({
+        frameType: 1, codecId: 7, avcPacketType: 1, compositionTime: 0,
+        nalus: [Buffer.from([0x65, 0x88, 0x84])],
+      });
+      spawned[0].child.stdout.write(writeTag({ type: TAG_VIDEO, timestamp, data: video }));
+    }
 
     // The one-second hold is wall-clock based; advance the injected clock and
     // let the scheduled release callback run.
-    clock += 1001;
+    clock += 1100;
     await new Promise((resolve) => setTimeout(resolve, 1050));
 
     const parser = createFlvParser();
@@ -88,6 +91,9 @@ test('P9.6 starts two copy-only FFmpeg children and publishes the protected -cc 
     const sei = parsed.nalus.find((nalu) => parseA53Sei(nalu));
     assert.ok(sei, 'A/53 SEI was inserted without re-encoding the frame');
     assert.ok(parseA53Sei(sei).pairs.length > 0, 'final caption produced valid 608 pairs');
+    const frameSeis = items.filter((item) => item.kind === 'tag' && item.type === TAG_VIDEO)
+      .map((item) => parseVideoTag(item.data).nalus.map(parseA53Sei).find(Boolean));
+    assert.ok(frameSeis.some((data) => data?.pairs.some(([a, b]) => a === 0x94 && b === 0x2f)), 'the caption EOC is in the scheduled presentation frame');
     assert.equal(service.state('church').captionsEmbedded, 1);
   } finally {
     service.notready('church');
