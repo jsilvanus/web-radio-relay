@@ -239,9 +239,10 @@ const probeService = createProbeService({
 /** Captioner probes its raw MediaMTX input independently of the optional radio pull URL. */
 const CAPTIONER_RTSP_BASE = process.env.MEDIAMTX_RTSP_BASE || DEFAULT_RTSP_BASE;
 const CAPTIONER_RTMP_BASE = process.env.MEDIAMTX_RTMP_BASE || 'rtmp://mediamtx:1935';
+const CAPTIONER_RTSP_ROOT = CAPTIONER_RTSP_BASE.endsWith('/') ? CAPTIONER_RTSP_BASE.slice(0, -1) : CAPTIONER_RTSP_BASE;
 const captionerProbeService = createProbeService({
   spawnProcess: spawn,
-  urlFor: (name) => `${CAPTIONER_RTSP_BASE.replace(/\\/+$/, '')}/live/${name}`,
+  urlFor: (name) => `${CAPTIONER_RTSP_ROOT}/live/${name}`,
   log: (msg) => console.log(`[captioner-probe] ${msg}`),
 });
 
