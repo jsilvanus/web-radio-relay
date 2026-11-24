@@ -218,7 +218,7 @@ This is the technique libcaption uses for FLV; the plan is a small own implement
 
 P9.6 implementation: `captioner-service.js` owns the two copy-only FFmpeg processes and the Node FLV pipeline. It reads `rtsp://<MEDIAMTX_RTSP_BASE>/live/<s>`, holds FLV tags, calls the live `captioner.js` scheduler by PTS, inserts the A/53 SEI before the first VCL NAL (after AUD/SPS/PPS), and publishes `rtmp://<MEDIAMTX_RTMP_BASE>/live/<s>-cc?secret=<HOOK_SECRET>`. The raw path is never modified. The service subscribes to final caption timeline events in the configured language; the legacy `POST .../captions` route also publishes into that timeline. MediaMTX ready/not-ready hooks start and stop the service, and the control API can enable/disable it while a source is already live.
 
-The live path uses `captioner.js`; `caption-schedule.js` remains a pure precomputed/offline scheduler and is not a second live implementation. Supported input is H.264 at 25/30/50/60 fps. `HOOK_SECRET` is required; the RTSP/RTMP base defaults are the internal MediaMTX endpoints. The real-FFmpeg test checks that FFmpeg decodes the inserted A/53 side data and extracts the caption text and frame timing.
+The live path uses `captioner.js`; `caption-schedule.js` remains a pure precomputed/offline scheduler and is not a second live implementation. Supported input is H.264 at 25/30/50 fps. `HOOK_SECRET` is required; the RTSP/RTMP base defaults are the internal MediaMTX endpoints. The real-FFmpeg test checks that FFmpeg decodes the inserted A/53 side data and extracts the caption text and frame timing.
 
 ---
 
