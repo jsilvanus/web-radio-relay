@@ -29,6 +29,20 @@ function checkedConfig(value = {}) {
   return config;
 }
 
+/**
+ * Add the scheduler's 608 pairs to one FLV AVC video tag. PTS (not DTS) chooses
+ * the caption frame, while the caller still writes tags in decode order.
+ */
+export function embedCaptionFrame({ data, timestamp, scheduler, fps, wallTimeMs, syncOffsetMs = 0 }) {
+  const video = parseVideoTag(data);
+  if (video.codecId !== 7 || video.avcPacketType !== AVC_NALU || video.nalus.length === 0) return data;
+  const ptsMs = timestamp + video.compositionTime;
+  const frameIndex = Math.max(0, Math.round((ptsMs * fps) / 1000));
+  const pairs = scheduler.pairsForFrame(frameIndex, wallTimeMs - syncOffsetMs);
+  const sei = a53SeiNal(pairs, { count: scheduler.ccCount });
+  return buildVideoTag({ ...video, nalus: [sei, ...video.nalus] });
+}
+
 function frameRate(probe) {
   const value = probe?.video?.fps;
   if (!Number.isFinite(value)) return null;
@@ -190,16 +204,13 @@ export function createCaptionerService({
         if (item.kind !== 'tag') continue;
         let data = item.data;
         if (item.type === TAG_VIDEO) {
-          const video = parseVideoTag(data);
-          if (video.codecId === 7 && video.avcPacketType === AVC_NALU && video.nalus.length) {
-            const ptsMs = item.timestamp + video.compositionTime;
-            const frameIndex = Math.max(0, Math.round((ptsMs * fps) / 1000));
-            const wallMs = entry.wallTimeMs - config.syncOffsetMs;
-            const pairs = scheduler.pairsForFrame(frameIndex, wallMs);
-            session.lastFrame = Math.max(session.lastFrame, frameIndex);
-            const sei = a53SeiNal(pairs, { count: scheduler.ccCount });
-            data = buildVideoTag({ ...video, nalus: [sei, ...video.nalus] });
-          }
+          const before = scheduler.stats().embedded;
+          data = embedCaptionFrame({
+            data, timestamp: item.timestamp, scheduler, fps,
+            wallTimeMs: entry.wallTimeMs, syncOffsetMs: config.syncOffsetMs,
+          });
+          session.lastFrame = Math.max(session.lastFrame, Math.round((item.timestamp * fps) / 1000));
+          if (scheduler.stats().embedded > before) session.embeddedAt = item.timestamp;
         }
         write(writeTag({ ...item, data }));
       }
