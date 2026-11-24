@@ -76,6 +76,7 @@ test('P9.6 starts two copy-only FFmpeg children and publishes the protected -cc 
         nalus: [Buffer.from([0x65, 0x88, 0x84])],
       });
       spawned[0].child.stdout.write(writeTag({ type: TAG_VIDEO, timestamp, data: video }));
+      await new Promise((resolve) => setImmediate(resolve));
     }
 
     // The one-second hold is wall-clock based; advance the injected clock and
