@@ -15,7 +15,7 @@ const DEFAULT_CONFIG = Object.freeze({ enabled: false, lang: 'fi', holdSeconds: 
 const SUPPORTED_FPS = new Set([25, 30, 50, 60]);
 
 function checkedConfig(value = {}) {
-  const config = { ...DEFAULT_CONFIG, ...(value || {}) };
+  const config = { ...serviceDefaults, ...(value || {}) };
   if (typeof config.enabled !== 'boolean') throw new TypeError('captioner.enabled must be boolean');
   if (typeof config.lang !== 'string' || !/^[a-z]{2,3}(-[a-z0-9]{1,8})*$/.test(config.lang)) {
     throw new TypeError('captioner.lang must be a language tag');
@@ -89,6 +89,7 @@ export function createCaptionerService({
   const sessions = new Map();
   const active = new Map();
   const live = new Set();
+  const serviceDefaults = { ...DEFAULT_CONFIG, holdSeconds: defaultHoldSeconds, syncOffsetMs: defaultSyncOffsetMs };
 
   const urlFor = (base, path) => `${base.replace(/\/$/, '')}/${path}`;
 
@@ -154,7 +155,7 @@ export function createCaptionerService({
     const session = {
       config, fps, parser, hold, scheduler, input: null, output: null,
       timer: null, unsubscribe: null, state: 'starting', error: null,
-      lastFrame: -1, stopping: false,
+      stopping: false,
     };
     sessions.set(stream, session);
 
@@ -220,7 +221,6 @@ export function createCaptionerService({
             data, timestamp: item.timestamp, scheduler, fps,
             wallTimeMs: entry.wallTimeMs, syncOffsetMs: config.syncOffsetMs,
           });
-          session.lastFrame = Math.max(session.lastFrame, Math.round((item.timestamp * fps) / 1000));
           if (scheduler.stats().embedded > before) session.embeddedAt = item.timestamp;
         }
         write(writeTag({ ...item, data }));
