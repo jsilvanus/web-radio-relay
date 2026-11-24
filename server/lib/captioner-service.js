@@ -236,7 +236,9 @@ export function createCaptionerService({
       }
       const next = hold.nextDueAt();
       if (next !== null && Number.isFinite(nowMs)) {
-        session.timer = setTimeout(release, Math.max(0, next - now()));
+        session.timer = setTimeout(() => {
+          try { release(); } catch (err) { fail(err); }
+        }, Math.max(0, next - now()));
         session.timer.unref?.();
       }
     }
@@ -257,7 +259,7 @@ export function createCaptionerService({
       // Drain through the same embed path; the final frames must not lose their captions.
       if (session.timer) clearTimeout(session.timer);
       session.timer = null;
-      release(Number.POSITIVE_INFINITY);
+      try { release(Number.POSITIVE_INFINITY); } catch (err) { fail(err); return; }
       try { session.output?.stdin?.end(); } catch { /* closed */ }
     });
 
