@@ -145,7 +145,7 @@ export function createCaptionerService({
     if (!fps || probeInfo?.video?.codec !== 'h264') {
       const message = !probeInfo?.video
         ? 'video probe is unavailable'
-        : `captioner requires H.264 at 25/30/50/60 fps (got ${probeInfo.video.codec || 'unknown'} @ ${probeInfo.video.fps ?? 'unknown'})`;
+        : `captioner requires H.264 at 25/30/50 fps (got ${probeInfo.video.codec || 'unknown'} @ ${probeInfo.video.fps ?? 'unknown'})`;
       sessions.set(stream, { config, state: 'failed', error: message });
       log(`captioner ${stream}: ${message}`);
       return state(stream);
