@@ -40,7 +40,14 @@ export function embedCaptionFrame({ data, timestamp, scheduler, fps, wallTimeMs,
   const frameIndex = Math.max(0, Math.round((ptsMs * fps) / 1000));
   const pairs = scheduler.pairsForFrame(frameIndex, wallTimeMs + video.compositionTime - syncOffsetMs);
   const sei = a53SeiNal(pairs, { count: scheduler.ccCount });
-  return buildVideoTag({ ...video, nalus: [sei, ...video.nalus] });
+  // Prefix SEI belongs after AUD/SPS/PPS and before the first VCL NAL.
+  const firstSlice = video.nalus.findIndex((nalu) => {
+    const type = nalu[0] & 0x1f;
+    return type >= 1 && type <= 5;
+  });
+  const at = firstSlice < 0 ? video.nalus.length : firstSlice;
+  const nalus = [...video.nalus.slice(0, at), sei, ...video.nalus.slice(at)];
+  return buildVideoTag({ ...video, nalus });
 }
 
 function frameRate(probe) {
