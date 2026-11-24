@@ -10,6 +10,7 @@ import { createFlvParser, parseVideoTag, buildVideoTag, writeFlvHeader, writeTag
 import { createHoldBuffer } from './hold-buffer.js';
 import { createCaptioner } from './captioner.js';
 import { a53SeiNal } from './cc-data.js';
+import { performance } from 'node:perf_hooks';
 
 const DEFAULT_CONFIG = Object.freeze({ enabled: false, lang: 'fi', holdSeconds: 16, syncOffsetMs: 1500 });
 const SUPPORTED_FPS = new Set([25, 30, 50, 60]);
@@ -81,7 +82,8 @@ export function createCaptionerService({
   secret = '',
   defaultHoldSeconds = 16,
   defaultSyncOffsetMs = 1500,
-  now = Date.now,
+  // Epoch-aligned monotonic time: avoids NTP wall-clock steps while staying comparable to Pi timestamps.
+  now = () => performance.timeOrigin + performance.now(),
   log = () => {},
 } = {}) {
   if (typeof spawnProcess !== 'function') throw new TypeError('spawnProcess is required');
