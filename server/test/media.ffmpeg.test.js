@@ -335,9 +335,12 @@ test('captioner: real ffmpeg FLV round trip exposes 608 text at the scheduled PT
       .filter((item) => item.kind === 'tag' && item.type === TAG_VIDEO)
       .flatMap((item) => parseVideoTag(item.data).nalus.map(parseA53Sei).filter(Boolean))
       .flatMap((sei) => sei.pairs);
-    const decodedChars = embeddedPairs
-      .filter((pair) => pair.every((byte) => (byte & 0x7f) >= 0x20 && (byte & 0x7f) <= 0x7e))
-      .flatMap((pair) => pair.map((byte) => String.fromCharCode(byte & 0x7f))).join('');
+    const decodedChars = embeddedPairs.flatMap(([a, b]) => {
+      const first = a & 0x7f;
+      const second = b & 0x7f;
+      if (first < 0x20 || first > 0x7e) return []; // control/PAC pair
+      return [String.fromCharCode(first), ...(second >= 0x20 && second <= 0x7e ? [String.fromCharCode(second)] : [])];
+    }).join('');
     assert.match(decodedChars, /Hei\\s+maailma/i, 'the inserted A/53 triplets carry the expected characters');
     writeFileSync(embeddedFile, Buffer.concat(output));
 
