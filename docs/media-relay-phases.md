@@ -220,7 +220,7 @@ Sync points: **S1** after P3 (one real publish through MediaMTX on a test host w
 
 ---
 
-## P9. Captioner (plan 8) — only after E1 passes
+## P9. Captioner (plan 8) — E1 passed (human-confirmed 2026-11-24)
 
 | Task | Content | Mark |
 |---|---|---|
@@ -285,5 +285,5 @@ All tasks were built on one branch (PR #13) instead of one PR each. Nothing has 
 | P7.5 viewer SSE | H+ | P7.1 | done (PR #13) |
 | P7b viewer pages | H+ | P7.5, P6.3 | done (PR #13) |
 | P8 translations | H | P7.2, P7.5 | done (PR #13) |
-| P9.1 to P9.6 captioner | S/H+ | E1, P3.3, P7.1 | P9.1 608 encoder, P9.2 cc_data/SEI, P9.3 FLV and P9.4 hold buffer done; E1 test file maker built (`docs/e1-youtube-608.md`), E1 itself not run; P9.5, P9.6 wait for E1 |
+| P9.1 to P9.6 captioner | S/H+ | E1, P3.3, P7.1 | E1 passed (human-confirmed 2026-11-24); P9.1-P9.5 components present; P9.6 wiring and API implemented on PR #13; awaiting CI and real-FFmpeg extraction verification |
 | P10 public ingest | H | P3.2 | done (PR #13) |
