@@ -73,7 +73,7 @@ export function createCaptionerService({
   function state(stream) {
     const session = sessions.get(stream);
     if (!session) return {
-      stream, state: active.has(stream) ? 'waiting' : 'off', running: false,
+      stream, state: active.get(stream)?.enabled ? 'waiting' : 'off', running: false,
       holdSeconds: active.get(stream)?.holdSeconds ?? defaultHoldSeconds,
       captionsEmbedded: 0, lateCount: 0, replacedCharacters: 0, error: null,
     };
@@ -181,10 +181,10 @@ export function createCaptionerService({
     };
     session.output.stdin.on('drain', () => session.input?.stdout?.resume());
 
-    function release() {
+    function release(nowMs = now()) {
       if (sessions.get(stream) !== session || session.stopping) return;
       session.timer = null;
-      const due = hold.due(now());
+      const due = hold.due(nowMs);
       for (const entry of due) {
         const item = entry.item;
         if (item.kind !== 'tag') continue;
@@ -204,7 +204,7 @@ export function createCaptionerService({
         write(writeTag({ ...item, data }));
       }
       const next = hold.nextDueAt();
-      if (next !== null) {
+      if (next !== null && Number.isFinite(nowMs)) {
         session.timer = setTimeout(release, Math.max(0, next - now()));
         session.timer.unref?.();
       }
@@ -223,13 +223,10 @@ export function createCaptionerService({
       } catch (err) { fail(err); }
     });
     session.input.stdout.once('end', () => {
-      // Drain the final held tags rather than silently dropping the tail.
+      // Drain through the same embed path; the final frames must not lose their captions.
       if (session.timer) clearTimeout(session.timer);
       session.timer = null;
-      for (const entry of hold.due(Number.POSITIVE_INFINITY)) {
-        const item = entry.item;
-        if (item.kind === 'tag') write(writeTag(item));
-      }
+      release(Number.POSITIVE_INFINITY);
       try { session.output?.stdin?.end(); } catch { /* closed */ }
     });
 
