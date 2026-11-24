@@ -290,6 +290,7 @@ test('captioner: real ffmpeg FLV round trip exposes 608 text at the scheduled PT
   try {
     const sourceFile = join(dir, 'source.flv');
     const embeddedFile = join(dir, 'embedded.flv');
+    const remuxedFile = join(dir, 'embedded.mp4');
     const subtitlesFile = join(dir, 'captions.srt');
     const source = spawnFfmpeg([
       ...LOG,
@@ -317,7 +318,6 @@ test('captioner: real ffmpeg FLV round trip exposes 608 text at the scheduled PT
       if (item.type === TAG_VIDEO) {
         const video = parseVideoTag(data);
         if (video.codecId === 7 && video.avcPacketType === AVC_NALU) {
-          const ptsMs = item.timestamp + video.compositionTime;
           data = embedCaptionFrame({
             data, timestamp: item.timestamp, scheduler, fps: 25,
             wallTimeMs: item.timestamp, syncOffsetMs: 0,
@@ -329,11 +329,17 @@ test('captioner: real ffmpeg FLV round trip exposes 608 text at the scheduled PT
     assert.equal(scheduler.stats().embedded, 1, 'the scheduler emitted one EOC');
     writeFileSync(embeddedFile, Buffer.concat(output));
 
+    // Remux only: the AVC access units (including our SEI) remain bit-identical.
+    const remux = spawnFfmpeg([...LOG, '-i', embeddedFile, '-map', '0', '-c', 'copy', remuxedFile]);
+    procs.push(remux);
+    const remuxed = await finish(remux);
+    assert.equal(remuxed.code, 0, remuxed.stderr);
+
     // FFmpeg's movie filter exposes the A/53 captions as its subcc output pad.
     const extract = spawnFfmpeg([
       ...LOG,
-      '-f', 'lavfi', '-i', `movie=filename=${embeddedFile}:dec_opts=export_side_data=a53cc[out0+subcc]`,
-      '-map', '0:s:0', '-c:s', 'srt', '-f', 'srt', subtitlesFile,
+      '-f', 'lavfi', '-i', `movie=filename=${remuxedFile}[out0+subcc]`,
+      '-map', '0:s', '-c:s', 'srt', '-f', 'srt', subtitlesFile,
     ]);
     procs.push(extract);
     const extracted = await finish(extract);
