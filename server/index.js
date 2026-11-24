@@ -1073,6 +1073,11 @@ app.post(['/api/v1/streams/:name/captions', '/api/v1/captions'], requireToken, s
   if (!entry) return res.status(409).json({ error: 'too many streams' });
   const accepted = entry.captions.add(checked.segments);
   entry.captions.prune(nowMs - (entry.delaySeconds * 1000 + CAPTION_RETENTION_SECONDS * 1000));
+  // Bridge the legacy caption POST into the shared timeline so the live embedder and viewer see it too.
+  storeStreamEvents(req.stream, checked.segments.map((segment) => ({
+    type: 'caption', lang: segment.lang, startedAt: segment.startedAt, endedAt: segment.endedAt,
+    payload: { text: segment.text, final: true },
+  })), nowMs);
   res.status(202).json({ stream: req.stream, accepted });
 });
 
