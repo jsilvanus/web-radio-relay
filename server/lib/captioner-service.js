@@ -13,7 +13,7 @@ import { a53SeiNal } from './cc-data.js';
 import { performance } from 'node:perf_hooks';
 
 const DEFAULT_CONFIG = Object.freeze({ enabled: false, lang: 'fi', holdSeconds: 16, syncOffsetMs: 1500 });
-const SUPPORTED_FPS = new Set([25, 30, 50, 60]);
+const SUPPORTED_FPS = new Set([25, 30, 50]);
 
 function checkedConfig(value = {}, defaults = DEFAULT_CONFIG) {
   const config = { ...defaults, ...(value || {}) };
