@@ -9,10 +9,13 @@
  *    updating its discovery record with all currently relayed venues and public endpoints.
  */
 
-import { fetchDiscoveryCatalog as tunnusFetchCatalog, createDiscoveryClient } from '@tunnus/discovery';
+import {
+  fetchDiscoveryCatalog as tunnusFetchCatalog,
+  createDiscoveryClient,
+  SERVICE_TYPES,
+  normalizeLocalPortUrl as tunnusNormalizeLocalPortUrl,
+} from '@tunnus/discovery';
 import { normalizeTunnelUrl } from './tunnel-proxy.js';
-
-export { tunnusFetchCatalog, createDiscoveryClient };
 
 /**
  * Normalizes a port or URL to a Docker host-reachable URL (host.docker.internal).
@@ -22,23 +25,17 @@ export { tunnusFetchCatalog, createDiscoveryClient };
  * @returns {string}
  */
 export function normalizeLocalPortUrl(value) {
-  if (value == null || value === '') return '';
-  if (typeof value === 'number' || /^\d+$/.test(String(value).trim())) {
-    return `http://host.docker.internal:${String(value).trim()}`;
+  const normalized = tunnusNormalizeLocalPortUrl(value);
+  if (typeof normalized === 'string' && normalized.endsWith('/') && !normalized.endsWith('://')) {
+    try {
+      const u = new URL(normalized);
+      if (u.pathname === '/') return normalized.slice(0, -1);
+    } catch {}
   }
-  const str = String(value).trim();
-  try {
-    const parsed = new URL(str);
-    // If it's a loop-bound address on the VPS, Docker container reaches it via host.docker.internal
-    if (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost') {
-      const port = parsed.port ? `:${parsed.port}` : '';
-      return `${parsed.protocol}//host.docker.internal${port}${parsed.pathname === '/' ? '' : parsed.pathname}`;
-    }
-    return parsed.origin + (parsed.pathname === '/' ? '' : parsed.pathname);
-  } catch {
-    return normalizeTunnelUrl(value);
-  }
+  return normalized;
 }
+
+export { tunnusFetchCatalog, createDiscoveryClient, SERVICE_TYPES };
 
 /**
  * Extracts Pi systems, venue profiles, and loop-bound tunnels from a Tunnus Discovery response.
