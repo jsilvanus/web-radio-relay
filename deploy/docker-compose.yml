@@ -20,6 +20,8 @@ services:
       - radio-hls:/var/www/radio/hls
       - radio-archive:/var/www/radio/archive
       - radio-logs:/var/log/nginx
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       api:
         condition: service_healthy
@@ -111,6 +113,11 @@ services:
       GATEWAY_CAPTION_STREAM: "${GATEWAY_CAPTION_STREAM:-}"
       HOOK_SECRET: "${HOOK_SECRET}"
       RADIO_SOURCE_URL_TEMPLATE: "${RADIO_SOURCE_URL_TEMPLATE:-}"
+      CANVA_TUNNEL_URL: "${CANVA_TUNNEL_URL:-http://host.docker.internal:3010}"
+      PICONTROL_TUNNEL_URL: "${PICONTROL_TUNNEL_URL:-http://host.docker.internal:3012}"
+      PICONTROL_MCP_TUNNEL_URL: "${PICONTROL_MCP_TUNNEL_URL:-http://host.docker.internal:3601}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - radio-hls:/var/www/radio/hls:ro
       - radio-archive:/var/www/radio/archive

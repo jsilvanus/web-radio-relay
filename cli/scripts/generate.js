@@ -4,7 +4,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const specPath = path.join(here, '..', '..', 'server', 'openapi.json');
@@ -50,7 +50,7 @@ function render(ops) {
   ].join('\n');
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
   fs.writeFileSync(outPath, render(operationsFromSpec(spec)));
   console.log(`wrote ${path.relative(process.cwd(), outPath)}`);

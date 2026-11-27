@@ -714,5 +714,14 @@ export const operations = [
         "required": true
       }
     ]
+  },
+  {
+    "operationId": "getTunnelsStatus",
+    "method": "GET",
+    "path": "/api/v1/tunnels/status",
+    "summary": "Status of reverse SSH tunnel routing for Canva, PiControl, and PiControl MCP",
+    "bearer": false,
+    "body": null,
+    "parameters": []
   }
 ];

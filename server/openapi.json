@@ -143,67 +143,166 @@
       },
       "CaptionerConfig": {
         "type": "object",
-        "required": ["enabled", "lang", "holdSeconds", "syncOffsetMs"],
+        "required": [
+          "enabled",
+          "lang",
+          "holdSeconds",
+          "syncOffsetMs"
+        ],
         "properties": {
-          "enabled": { "type": "boolean", "default": false },
-          "lang": { "type": "string", "pattern": "^[a-z]{2,3}(-[a-z0-9]{1,8})*$", "default": "fi" },
-          "holdSeconds": { "type": "number", "minimum": 1, "maximum": 60, "default": 16 },
-          "syncOffsetMs": { "type": "integer", "minimum": -10000, "maximum": 10000, "default": 1500 }
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "lang": {
+            "type": "string",
+            "pattern": "^[a-z]{2,3}(-[a-z0-9]{1,8})*$",
+            "default": "fi"
+          },
+          "holdSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 60,
+            "default": 16
+          },
+          "syncOffsetMs": {
+            "type": "integer",
+            "minimum": -10000,
+            "maximum": 10000,
+            "default": 1500
+          }
         }
       },
       "CaptionerConfigPatch": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean" },
-          "lang": { "type": "string", "pattern": "^[a-z]{2,3}(-[a-z0-9]{1,8})*$" },
-          "holdSeconds": { "type": "number", "minimum": 1, "maximum": 60 },
-          "syncOffsetMs": { "type": "integer", "minimum": -10000, "maximum": 10000 }
+          "enabled": {
+            "type": "boolean"
+          },
+          "lang": {
+            "type": "string",
+            "pattern": "^[a-z]{2,3}(-[a-z0-9]{1,8})*$"
+          },
+          "holdSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 60
+          },
+          "syncOffsetMs": {
+            "type": "integer",
+            "minimum": -10000,
+            "maximum": 10000
+          }
         }
       },
       "CaptionerResponse": {
         "type": "object",
-        "required": ["stream", "config", "status"],
+        "required": [
+          "stream",
+          "config",
+          "status"
+        ],
         "properties": {
-          "stream": { "type": "string" },
-          "config": { "$ref": "#/components/schemas/CaptionerConfig" },
+          "stream": {
+            "type": "string"
+          },
+          "config": {
+            "$ref": "#/components/schemas/CaptionerConfig"
+          },
           "status": {
             "type": "object",
             "properties": {
-              "state": { "type": "string", "enum": ["off", "waiting", "starting", "running", "failed"] },
-              "running": { "type": "boolean" },
-              "holdSeconds": { "type": "number" },
-              "captionsEmbedded": { "type": "integer" },
-              "lateCount": { "type": "integer" },
-              "lateMsMax": { "type": "number" },
-              "replacedCharacters": { "type": "integer" },
-              "pendingCaptions": { "type": "integer" },
-              "error": { "type": ["string", "null"] }
+              "state": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "waiting",
+                  "starting",
+                  "running",
+                  "failed"
+                ]
+              },
+              "running": {
+                "type": "boolean"
+              },
+              "holdSeconds": {
+                "type": "number"
+              },
+              "captionsEmbedded": {
+                "type": "integer"
+              },
+              "lateCount": {
+                "type": "integer"
+              },
+              "lateMsMax": {
+                "type": "number"
+              },
+              "replacedCharacters": {
+                "type": "integer"
+              },
+              "pendingCaptions": {
+                "type": "integer"
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
             }
           }
         }
       },
       "StreamConfig": {
         "type": "object",
-        "required": ["visibleLanguages", "radio", "videoHls", "recordOnLive", "publicGraphics", "viewerKey", "captioner"],
+        "required": [
+          "visibleLanguages",
+          "radio",
+          "videoHls",
+          "recordOnLive",
+          "publicGraphics",
+          "viewerKey",
+          "captioner"
+        ],
         "properties": {
           "visibleLanguages": {
             "type": "array",
             "minItems": 1,
             "maxItems": 10,
-            "items": { "type": "string", "example": "fi" },
+            "items": {
+              "type": "string",
+              "example": "fi"
+            },
             "description": "Languages viewers get (translations and composedText). Default [\"fi\"]."
           },
-          "radio": { "type": "boolean", "description": "Start the radio pull when MediaMTX reports the source ready. Default true." },
-          "videoHls": { "type": "boolean", "description": "Stored for the video phase; no effect yet. Default false." },
-          "recordOnLive": { "type": "boolean", "description": "Stored for the recording phase; no effect yet. Default false." },
-          "publicGraphics": { "type": "boolean", "description": "Send graphic events to viewers. Default true." },
+          "radio": {
+            "type": "boolean",
+            "description": "Start the radio pull when MediaMTX reports the source ready. Default true."
+          },
+          "videoHls": {
+            "type": "boolean",
+            "description": "Stored for the video phase; no effect yet. Default false."
+          },
+          "recordOnLive": {
+            "type": "boolean",
+            "description": "Stored for the recording phase; no effect yet. Default false."
+          },
+          "publicGraphics": {
+            "type": "boolean",
+            "description": "Send graphic events to viewers. Default true."
+          },
           "viewerKey": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "pattern": "^[a-z0-9_-]{8,64}$",
             "description": "Key for /api/v1/viewer/{viewerKey}, or null (the stream name opens the viewer). Default null."
           },
-          "captioner": { "$ref": "#/components/schemas/CaptionerConfig" }
+          "captioner": {
+            "$ref": "#/components/schemas/CaptionerConfig"
+          }
         }
       },
       "StreamConfigPatch": {
@@ -211,21 +310,51 @@
         "additionalProperties": false,
         "description": "Any subset of the StreamConfig fields.",
         "properties": {
-          "visibleLanguages": { "type": "array", "minItems": 1, "maxItems": 10, "items": { "type": "string" } },
-          "radio": { "type": "boolean" },
-          "videoHls": { "type": "boolean" },
-          "recordOnLive": { "type": "boolean" },
-          "publicGraphics": { "type": "boolean" },
-          "viewerKey": { "type": ["string", "null"], "pattern": "^[a-z0-9_-]{8,64}$" },
-          "captioner": { "$ref": "#/components/schemas/CaptionerConfigPatch" }
+          "visibleLanguages": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10,
+            "items": {
+              "type": "string"
+            }
+          },
+          "radio": {
+            "type": "boolean"
+          },
+          "videoHls": {
+            "type": "boolean"
+          },
+          "recordOnLive": {
+            "type": "boolean"
+          },
+          "publicGraphics": {
+            "type": "boolean"
+          },
+          "viewerKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[a-z0-9_-]{8,64}$"
+          },
+          "captioner": {
+            "$ref": "#/components/schemas/CaptionerConfigPatch"
+          }
         }
       },
       "StreamConfigResponse": {
         "type": "object",
-        "required": ["stream", "config"],
+        "required": [
+          "stream",
+          "config"
+        ],
         "properties": {
-          "stream": { "type": "string" },
-          "config": { "$ref": "#/components/schemas/StreamConfig" }
+          "stream": {
+            "type": "string"
+          },
+          "config": {
+            "$ref": "#/components/schemas/StreamConfig"
+          }
         }
       },
       "Delay": {
@@ -339,11 +468,17 @@
             }
           },
           "expiresAt": {
-            "type": ["integer", "null"],
+            "type": [
+              "integer",
+              "null"
+            ],
             "description": "Epoch milliseconds, or null when the token never expires."
           },
           "label": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -362,7 +497,10 @@
             "type": "string"
           },
           "label": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "scopes": {
             "type": "array",
@@ -375,11 +513,17 @@
             "description": "Epoch milliseconds."
           },
           "expiresAt": {
-            "type": ["integer", "null"],
+            "type": [
+              "integer",
+              "null"
+            ],
             "description": "Epoch milliseconds, or null."
           },
           "revokedAt": {
-            "type": ["integer", "null"],
+            "type": [
+              "integer",
+              "null"
+            ],
             "description": "Epoch milliseconds, or null while the token is live."
           }
         }
@@ -462,23 +606,68 @@
           },
           "probe": {
             "description": "Last ffprobe result of the stream's input, in memory: set when the source becomes ready, cleared when it drops. Null when unknown.",
-            "type": ["object", "null"],
+            "type": [
+              "object",
+              "null"
+            ],
             "properties": {
               "video": {
-                "type": ["object", "null"],
+                "type": [
+                  "object",
+                  "null"
+                ],
                 "properties": {
-                  "codec": { "type": ["string", "null"] },
-                  "width": { "type": ["integer", "null"] },
-                  "height": { "type": ["integer", "null"] },
-                  "fps": { "type": ["number", "null"], "description": "Average frame rate, 3 decimals; null when unknown" }
+                  "codec": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "width": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "height": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "fps": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "description": "Average frame rate, 3 decimals; null when unknown"
+                  }
                 }
               },
               "audio": {
-                "type": ["object", "null"],
+                "type": [
+                  "object",
+                  "null"
+                ],
                 "properties": {
-                  "codec": { "type": ["string", "null"] },
-                  "sampleRate": { "type": ["integer", "null"] },
-                  "channels": { "type": ["integer", "null"] }
+                  "codec": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "sampleRate": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "channels": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
                 }
               }
             }
@@ -1012,7 +1201,11 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["assetId", "size", "reused"],
+                  "required": [
+                    "assetId",
+                    "size",
+                    "reused"
+                  ],
                   "properties": {
                     "assetId": {
                       "type": "string",
@@ -1831,14 +2024,21 @@
         "operationId": "publishStreamEvents",
         "summary": "Push timeline events for one stream (batch)",
         "description": "Stores caption, translation, section, graphic, marker and data events on the stream timeline. One invalid event rejects the whole batch; the 400 message names its index (events[i]). Events with a sourceKey already stored for the stream and type are counted as deduped.",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "name",
             "in": "path",
             "required": true,
             "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
-            "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" }
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
           }
         ],
         "requestBody": {
@@ -1847,7 +2047,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["events"],
+                "required": [
+                  "events"
+                ],
                 "properties": {
                   "events": {
                     "type": "array",
@@ -1855,14 +2057,46 @@
                     "maxItems": 100,
                     "items": {
                       "type": "object",
-                      "required": ["type", "startedAt", "payload"],
+                      "required": [
+                        "type",
+                        "startedAt",
+                        "payload"
+                      ],
                       "properties": {
-                        "type": { "type": "string", "enum": ["caption", "translation", "section", "graphic", "marker", "data"] },
-                        "lang": { "type": "string", "description": "Required for caption and translation." },
-                        "startedAt": { "type": "integer", "description": "Epoch milliseconds, greater than 0." },
-                        "endedAt": { "type": ["integer", "null"] },
-                        "sourceKey": { "type": "string", "maxLength": 128, "description": "Dedupe key per stream and type." },
-                        "payload": { "type": "object", "description": "Depends on type; unknown fields are dropped." }
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "caption",
+                            "translation",
+                            "section",
+                            "graphic",
+                            "marker",
+                            "data"
+                          ]
+                        },
+                        "lang": {
+                          "type": "string",
+                          "description": "Required for caption and translation."
+                        },
+                        "startedAt": {
+                          "type": "integer",
+                          "description": "Epoch milliseconds, greater than 0."
+                        },
+                        "endedAt": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "sourceKey": {
+                          "type": "string",
+                          "maxLength": 128,
+                          "description": "Dedupe key per stream and type."
+                        },
+                        "payload": {
+                          "type": "object",
+                          "description": "Depends on type; unknown fields are dropped."
+                        }
                       }
                     }
                   }
@@ -1879,8 +2113,12 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "added": { "type": "integer" },
-                    "deduped": { "type": "integer" }
+                    "added": {
+                      "type": "integer"
+                    },
+                    "deduped": {
+                      "type": "integer"
+                    }
                   }
                 }
               }
@@ -1888,10 +2126,20 @@
           },
           "400": {
             "description": "Invalid body; the message names the field and the event index",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
-          "401": { "description": "Missing or wrong token" },
-          "503": { "description": "RELAY_API_TOKEN not set" }
+          "401": {
+            "description": "Missing or wrong token"
+          },
+          "503": {
+            "description": "RELAY_API_TOKEN not set"
+          }
         }
       }
     },
@@ -2187,37 +2435,93 @@
         "operationId": "getStreamCaptioner",
         "summary": "Read CEA-608 captioner configuration and status",
         "description": "Scope stream:<name>:control (the admin token passes). Status is runtime-only; configuration persists per stream.",
-        "security": [{ "bearerAuth": [] }],
-        "parameters": [{
-          "name": "name", "in": "path", "required": true,
-          "description": "Stream name, a-z 0-9 _ - up to 32 characters.",
-          "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" }
-        }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name, a-z 0-9 _ - up to 32 characters.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
         "responses": {
-          "200": { "description": "Captioner configuration and runtime status", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CaptionerResponse" } } } },
-          "401": { "description": "Missing, wrong or expired token" },
-          "403": { "description": "Token lacks stream:<name>:control" }
+          "200": {
+            "description": "Captioner configuration and runtime status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptionerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, wrong or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          }
         }
       },
       "put": {
         "operationId": "setStreamCaptioner",
         "summary": "Configure the CEA-608 captioner",
         "description": "Partial updates are accepted. Enabling while the source is live starts the copy-only FFmpeg/FLV embedder; disabling stops it. holdSeconds is the wall-clock media hold, syncOffsetMs adjusts the sender/relay clock alignment.",
-        "security": [{ "bearerAuth": [] }],
-        "parameters": [{
-          "name": "name", "in": "path", "required": true,
-          "description": "Stream name, a-z 0-9 _ - up to 32 characters.",
-          "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" }
-        }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Stream name, a-z 0-9 _ - up to 32 characters.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CaptionerConfigPatch" } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptionerConfigPatch"
+              }
+            }
+          }
         },
         "responses": {
-          "200": { "description": "Updated configuration and runtime status", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CaptionerResponse" } } } },
-          "400": { "description": "Invalid captioner configuration" },
-          "401": { "description": "Missing, wrong or expired token" },
-          "403": { "description": "Token lacks stream:<name>:control" }
+          "200": {
+            "description": "Updated configuration and runtime status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptionerResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid captioner configuration"
+          },
+          "401": {
+            "description": "Missing, wrong or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          }
         }
       }
     },
@@ -2226,61 +2530,109 @@
         "operationId": "getStreamConfig",
         "summary": "Read the per-stream config",
         "description": "Stored fields over the defaults. Scope stream:<name>:control (the admin token passes).",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "name",
             "in": "path",
             "required": true,
             "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
-            "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" }
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
           }
         ],
         "responses": {
           "200": {
             "description": "Config",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StreamConfigResponse" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamConfigResponse"
+                }
+              }
+            }
           },
-          "401": { "description": "Missing, wrong or expired token" },
-          "403": { "description": "Token lacks stream:<name>:control" }
+          "401": {
+            "description": "Missing, wrong or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          }
         }
       },
       "put": {
         "operationId": "setStreamConfig",
         "summary": "Set part of the per-stream config",
         "description": "Only the fields sent are changed. Unknown fields are refused (400). visibleLanguages: [\"*\"] (default, every language) or 1 to 10 language tags; the translations viewers get and the language shown under the original (composedText) follow it. radio: the MediaMTX ready hook starts the radio pull (RADIO_ON_READY=off still wins). publicGraphics: false keeps graphic events from viewers. videoHls and recordOnLive are stored for later phases and have no effect yet. viewerKey: null, or 8-64 characters a-z 0-9 _ -; the viewer then opens at /api/v1/viewer/{viewerKey} and the stream name no longer opens it. A viewerKey used by another stream answers 409.",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "name",
             "in": "path",
             "required": true,
             "description": "Stream name (the RTMP stream key), a-z 0-9 _ - up to 32 characters.",
-            "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" }
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
           }
         ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/StreamConfigPatch" }
+              "schema": {
+                "$ref": "#/components/schemas/StreamConfigPatch"
+              }
             }
           }
         },
         "responses": {
           "200": {
             "description": "Config after the change",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StreamConfigResponse" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamConfigResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid field or value (the message names it)",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
-          "401": { "description": "Missing, wrong or expired token" },
-          "403": { "description": "Token lacks stream:<name>:control" },
+          "401": {
+            "description": "Missing, wrong or expired token"
+          },
+          "403": {
+            "description": "Token lacks stream:<name>:control"
+          },
           "409": {
             "description": "viewerKey is already used by another stream",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -2297,24 +2649,46 @@
             "in": "path",
             "required": true,
             "description": "Viewer key: the stream's viewerKey (8-64 characters a-z 0-9 _ -), or a stream name (up to 32 characters) while the stream has no viewerKey.",
-            "schema": { "type": "string", "pattern": "^[a-z0-9_-]{1,64}$" }
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,64}$"
+            }
           },
           {
             "name": "mode",
             "in": "query",
             "required": false,
             "description": "live (default): events are sent when stored. delayed: events are released at startedAt plus the stream's listener delay.",
-            "schema": { "type": "string", "enum": ["live", "delayed"], "default": "live" }
+            "schema": {
+              "type": "string",
+              "enum": [
+                "live",
+                "delayed"
+              ],
+              "default": "live"
+            }
           }
         ],
         "responses": {
           "200": {
             "description": "Event stream (text/event-stream)",
-            "content": { "text/event-stream": { "schema": { "type": "string" } } }
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid key or mode",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -2339,21 +2713,53 @@
                     "captionSource": {
                       "type": "object",
                       "properties": {
-                        "configured": { "type": "boolean" },
-                        "connected": { "type": "boolean" },
-                        "lastEventAt": { "type": ["integer", "null"], "description": "Epoch milliseconds of the last transcript event" },
-                        "received": { "type": "integer" },
-                        "rejected": { "type": "integer" },
-                        "deduped": { "type": "integer" },
-                        "reconnects": { "type": "integer" },
-                        "lastError": { "type": ["string", "null"] },
+                        "configured": {
+                          "type": "boolean"
+                        },
+                        "connected": {
+                          "type": "boolean"
+                        },
+                        "lastEventAt": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "Epoch milliseconds of the last transcript event"
+                        },
+                        "received": {
+                          "type": "integer"
+                        },
+                        "rejected": {
+                          "type": "integer"
+                        },
+                        "deduped": {
+                          "type": "integer"
+                        },
+                        "reconnects": {
+                          "type": "integer"
+                        },
+                        "lastError": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "mapper": {
-                          "type": ["object", "null"],
+                          "type": [
+                            "object",
+                            "null"
+                          ],
                           "description": "Counts of the gateway event mapper (rundown, translation, graphic): mapped, rejected, unknown",
                           "properties": {
-                            "mapped": { "type": "integer" },
-                            "rejected": { "type": "integer" },
-                            "unknown": { "type": "integer" }
+                            "mapped": {
+                              "type": "integer"
+                            },
+                            "rejected": {
+                              "type": "integer"
+                            },
+                            "unknown": {
+                              "type": "integer"
+                            }
                           }
                         }
                       }
@@ -2368,7 +2774,8 @@
           }
         }
       }
-    },    "/api/v1/streams/lifecycle": {
+    },
+    "/api/v1/streams/lifecycle": {
       "get": {
         "operationId": "listManagedStreamLifecycles",
         "summary": "List managed stream lifecycle states",
@@ -3479,6 +3886,86 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tunnels/status": {
+      "get": {
+        "operationId": "getTunnelsStatus",
+        "summary": "Status of reverse SSH tunnel routing for Canva, PiControl, and PiControl MCP",
+        "responses": {
+          "200": {
+            "description": "Tunnel status and configured routes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "canva": {
+                      "type": "object",
+                      "properties": {
+                        "configured": {
+                          "type": "boolean"
+                        },
+                        "target": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "routes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "picontrol": {
+                      "type": "object",
+                      "properties": {
+                        "configured": {
+                          "type": "boolean"
+                        },
+                        "target": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "routes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "picontrolMcp": {
+                      "type": "object",
+                      "properties": {
+                        "configured": {
+                          "type": "boolean"
+                        },
+                        "target": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "routes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }

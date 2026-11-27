@@ -132,6 +132,7 @@ import { DEFAULT_RTSP_BASE } from './lib/ffmpeg-input.js';
 import { validateEventBatch } from './lib/events.js';
 import { getConfig, putConfig, resolveViewerStream, StreamConfigError, VIEWER_KEY } from './lib/stream-config.js';
 import { createLateCounter, markLateTranslations } from './lib/translation-ingest.js';
+import { createTunnelRouter } from './lib/tunnel-proxy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -173,6 +174,13 @@ const s3Config = s3ConfigFromEnv(process.env);
 /** One S3 client for assets and recordings; null when S3 is not configured. */
 const s3Client = s3Config ? createS3Client(s3Config) : null;
 const assetStore = createAssetStore({ s3: s3Client, dir: ASSET_DIR });
+
+/** Upstream reverse-SSH tunnel target for Canva application (e.g. http://host.docker.internal:3010) */
+const CANVA_TUNNEL_URL = process.env.CANVA_TUNNEL_URL || '';
+/** Upstream reverse-SSH tunnel target for PiControl operator UI and API (e.g. http://host.docker.internal:3012) */
+const PICONTROL_TUNNEL_URL = process.env.PICONTROL_TUNNEL_URL || '';
+/** Upstream reverse-SSH tunnel target for PiControl MCP server (e.g. http://host.docker.internal:3601) */
+const PICONTROL_MCP_TUNNEL_URL = process.env.PICONTROL_MCP_TUNNEL_URL || '';
 
 /** Stream used by the legacy routes (/api/status, /api/captions, /api/hls/...) */
 const DEFAULT_STREAM = process.env.DEFAULT_STREAM || 'stream';
@@ -351,6 +359,16 @@ app.use((_req, res, next) => {
 });
 
 app.options('*', (_req, res) => res.sendStatus(204));
+
+// ---------------------------------------------------------------------------
+// Reverse SSH Tunnel Proxy: Canva Application, PiControl & PiControl MCP
+// Mounted before body parsers and stream routing so large uploads and SSE pass through.
+// ---------------------------------------------------------------------------
+app.use(createTunnelRouter({
+  canvaTunnelUrl: CANVA_TUNNEL_URL,
+  picontrolTunnelUrl: PICONTROL_TUNNEL_URL,
+  picontrolMcpTunnelUrl: PICONTROL_MCP_TUNNEL_URL
+}));
 
 // ---------------------------------------------------------------------------
 // Rate limiting — prevent excessive filesystem access from any single client
@@ -1478,6 +1496,9 @@ const server = app.listen(PORT, () => {
   console.log(`  STATS_FILE                 : ${STATS_FILE}`);
   console.log(`  STATS_SESSION_DAYS         : ${STATS_SESSION_DAYS}`);
   console.log(`  RELAY_API_TOKEN            : ${RELAY_API_TOKEN ? '(set)' : '(unset: control API answers 503)'}`);
+  console.log(`  CANVA_TUNNEL_URL           : ${CANVA_TUNNEL_URL || '(disabled)'}`);
+  console.log(`  PICONTROL_TUNNEL_URL       : ${PICONTROL_TUNNEL_URL || '(disabled)'}`);
+  console.log(`  PICONTROL_MCP_TUNNEL_URL   : ${PICONTROL_MCP_TUNNEL_URL || '(disabled)'}`);
   console.log(`  DELAY_SECONDS              : ${INITIAL_DELAY_SECONDS} initial (max ${DELAY_MAX_SECONDS})`);
   console.log(`  CAPTION_RETENTION_SECONDS  : ${CAPTION_RETENTION_SECONDS}`);
   console.log(`  EMAIL_PROVIDER             : ${EMAIL_PROVIDER || 'disabled'}`);

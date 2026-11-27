@@ -587,6 +587,9 @@ Copy `.env.example` to `.env` and override only what you need.
 | `RELAY_NAME` | *(unset)* | Instance name put into the handoff manifest (`origin.instance`) |
 | `RECORDING_SPOOL_DIR` | `/var/lib/relay/spool` | Local spool of the recorder's 60 s segments; a segment is removed after its verified S3 upload. Needs S3 for recordings |
 | `RECORDING_SPOOL_MAX_BYTES` | `2147483648` (2 GiB) | Spool size above which recordings are `degraded` (recording goes on; nothing unuploaded is deleted) |
+| `CANVA_TUNNEL_URL` | *(unset)* | Upstream reverse SSH tunnel target for Canva application (e.g. `http://host.docker.internal:3010`). Routes `/canva/*`, `/api/v1/canva/*`, `/api/v1/graphics/canva/*` with CORS headers |
+| `PICONTROL_TUNNEL_URL` | *(unset)* | Upstream reverse SSH tunnel target for PiControl operator UI & API (e.g. `http://host.docker.internal:3012`). Routes `/control/*`, `/picontrol/*`, `/ui/api/*` and passes through SSE events without buffering |
+| `PICONTROL_MCP_TUNNEL_URL` | *(unset)* | Upstream reverse SSH tunnel target for PiControl MCP server (e.g. `http://host.docker.internal:3601`). Routes `/mcp`, `/mcp/*`, `/api/v1/mcp/*` with WebSocket / streamable HTTP SSE support |
 
 ### FFmpeg / on-publish.sh
 
