@@ -116,7 +116,7 @@ export function resolveDatabaseTarget(env = process.env) {
       type: 'postgres',
       host: env.DB_HOST,
       port: Number(env.DB_PORT) || 5432,
-      database: env.DB_NAME || 'media_relay_prod',
+      database: env.DB_NAME || 'media_relay_db',
       user: env.DB_USER || 'media_relay_user',
       password: env.DB_PASSWORD || '',
     };
