@@ -17,7 +17,12 @@ import { URL } from 'node:url';
 import express from 'express';
 import { bearerToken, tokensEqual } from './auth.js';
 import { findTokenByValue, isUsable, scopeAllows } from './tokens.js';
-import { mapDiscoveryToPiSystems, fetchDiscoveryCatalog } from './discovery-client.js';
+import {
+  mapDiscoveryToPiSystems,
+  fetchDiscoveryCatalog,
+  buildMediaRelayRegistrationPayload,
+  registerMediaRelayService,
+} from './discovery-client.js';
 
 /**
  * Validates and normalizes a tunnel URL (must be http or https, or port number).
@@ -521,10 +526,35 @@ export function createTunnelRouter(options = {}) {
   // ---------------------------------------------------------------------------
   const discoveryUrl = options.discoveryServiceUrl ?? process.env.DISCOVERY_SERVICE_URL ?? process.env.TUNNUS_DISCOVERY_URL ?? '';
   const discoveryToken = options.discoveryToken ?? process.env.DISCOVERY_TOKEN ?? process.env.TUNNUS_TOKEN ?? '';
+  const discoveryClientId = options.discoveryClientId ?? process.env.DISCOVERY_CLIENT_ID ?? process.env.OIDC_CLIENT_ID ?? '';
+  const discoveryClientSecret = options.discoveryClientSecret ?? process.env.DISCOVERY_CLIENT_SECRET ?? process.env.OIDC_CLIENT_SECRET ?? '';
   const pollIntervalSeconds = Number(options.discoveryPollIntervalSeconds ?? process.env.DISCOVERY_POLL_INTERVAL_SECONDS ?? 30);
 
   let lastDiscoverySyncAt = null;
   let lastDiscoveryError = null;
+  let lastSelfRegistrationAt = null;
+  let lastSelfRegistrationError = null;
+
+  async function selfRegisterMediaRelay() {
+    if (!discoveryUrl) return { ok: false, error: 'DISCOVERY_SERVICE_URL is not configured' };
+    try {
+      const payload = buildMediaRelayRegistrationPayload(options, systems, defaultSystemId);
+      const res = await registerMediaRelayService({
+        discoveryUrl,
+        payload,
+        clientId: discoveryClientId,
+        clientSecret: discoveryClientSecret,
+        token: discoveryToken,
+        fetchImpl: options.fetchImpl || fetch
+      });
+      lastSelfRegistrationAt = Date.now();
+      lastSelfRegistrationError = null;
+      return { ok: true, registeredAt: lastSelfRegistrationAt, service: res };
+    } catch (err) {
+      lastSelfRegistrationError = err.message;
+      return { ok: false, error: err.message };
+    }
+  }
 
   async function syncFromDiscovery() {
     if (!discoveryUrl) return { ok: false, error: 'DISCOVERY_SERVICE_URL is not configured' };
@@ -559,7 +589,21 @@ export function createTunnelRouter(options = {}) {
       }
       lastDiscoverySyncAt = Date.now();
       lastDiscoveryError = null;
-      return { ok: true, synced: count, systems: Array.from(discovered.keys()), updatedAt: lastDiscoverySyncAt };
+
+      // Update Media Relay's self-registration in Tunnus with the latest relayed systems and venue endpoints
+      if (options.selfRegister !== false) {
+        await selfRegisterMediaRelay().catch((err) => {
+          console.warn('[discovery] Failed to update media-relay self-registration in Tunnus:', err.message);
+        });
+      }
+
+      return {
+        ok: true,
+        synced: count,
+        systems: Array.from(discovered.keys()),
+        updatedAt: lastDiscoverySyncAt,
+        selfRegistered: Boolean(lastSelfRegistrationAt)
+      };
     } catch (err) {
       lastDiscoveryError = err.message;
       console.warn(`[discovery] Failed to pull discovery catalog from ${discoveryUrl}:`, err.message);
@@ -585,6 +629,11 @@ export function createTunnelRouter(options = {}) {
       pollIntervalSeconds,
       lastSyncAt: lastDiscoverySyncAt,
       lastError: lastDiscoveryError,
+      selfRegistration: {
+        configured: Boolean(discoveryClientId || discoveryToken),
+        lastRegisteredAt: lastSelfRegistrationAt,
+        lastError: lastSelfRegistrationError
+      },
       totalSystems: systems.size
     });
   });
@@ -592,6 +641,12 @@ export function createTunnelRouter(options = {}) {
   // Manually trigger a pull from the discovery service
   router.post(['/api/v1/discovery/sync', '/api/v1/tunnels/sync'], async (_req, res) => {
     const result = await syncFromDiscovery();
+    res.status(result.ok ? 200 : 502).json(result);
+  });
+
+  // Manually trigger self-registration in the discovery service
+  router.post(['/api/v1/discovery/register', '/api/v1/tunnels/register-self'], async (_req, res) => {
+    const result = await selfRegisterMediaRelay();
     res.status(result.ok ? 200 : 502).json(result);
   });
 

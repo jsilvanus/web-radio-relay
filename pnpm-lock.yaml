@@ -18,6 +18,9 @@ importers:
 
   server:
     dependencies:
+      '@tunnus/discovery':
+        specifier: ^0.1.0
+        version: 0.1.0
       express:
         specifier: ^4.18.2
         version: 4.22.3
@@ -297,6 +300,9 @@ packages:
     resolution: {integrity: sha512-/W1LBsMeQAdiCuH3Z2gkRspl3mlxL+butknhq4vXjmxO45vuT08BqhehxDoE4YS+m6s9lhpq6M9/PjTEAg8PYw==}
     cpu: [x64]
     os: [win32]
+
+  '@tunnus/discovery@0.1.0':
+    resolution: {integrity: sha512-etXQ+oilarZTDhTc4wo3MiNKjhr1AJdQMX5gFNk1VNZ8baAv2tdb8jJI58XEzAoK8WAEorieJJMUsuSLStJmrA==}
 
   '@types/estree@1.0.10':
     resolution: {integrity: sha512-lTyOMnOcmRBzdCv6/4zUZCrEhV0xrqQiUZBZtVcbmLHBXKLnN8q89v/wKRF/Q0HbwVsqbIG3o5HDoFl9sduM+g==}
@@ -852,6 +858,8 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.68.8':
     optional: true
+
+  '@tunnus/discovery@0.1.0': {}
 
   '@types/estree@1.0.10': {}
 

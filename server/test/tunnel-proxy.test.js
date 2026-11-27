@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import express from 'express';
 import { openStore } from '../lib/store.js';
-import { normalizeLocalPortUrl, mapDiscoveryToPiSystems } from '../lib/discovery-client.js';
+import {
+  normalizeLocalPortUrl,
+  mapDiscoveryToPiSystems,
+  buildMediaRelayRegistrationPayload,
+  registerMediaRelayService
+} from '../lib/discovery-client.js';
 import {
   normalizeTunnelUrl,
   rewriteTunnelPath,
@@ -653,3 +658,129 @@ test('pulling discovery catalog registers Pi systems and routes traffic', async 
     await new Promise((r) => mockDiscoveryServer.close(r));
   }
 });
+
+test('Pi Gateways advertise simply as Pi systems and are mapped to Canva, PiControl and MCP', () => {
+  const discoveryCatalog = {
+    updated_at: '2026-11-27T08:00:00Z',
+    services: [
+      {
+        id: 'keskuskirkko-gateway',
+        name: 'Keskuskirkko Pi System',
+        type: 'pi-system',
+        venue: 'keskuskirkko',
+        endpoint_url: 'http://127.0.0.1:3010',
+        metadata: {
+          venue: {
+            profile: 'keskuskirkko',
+            sanctuary: 'Main'
+          }
+        }
+      },
+      {
+        id: 'kappeli-node',
+        name: 'Kappeli Pi System',
+        type: 'pigateway',
+        venue: 'kappeli',
+        metadata: {
+          tunnel_port: 3020
+        }
+      }
+    ]
+  };
+
+  const systems = mapDiscoveryToPiSystems(discoveryCatalog);
+  assert.equal(systems.size, 2);
+
+  const keskuskirkko = systems.get('keskuskirkko');
+  assert.ok(keskuskirkko);
+  // Single advertised loopback tunnel port serves Canva, PiControl and MCP
+  assert.equal(keskuskirkko.canva, 'http://host.docker.internal:3010');
+  assert.equal(keskuskirkko.picontrol, 'http://host.docker.internal:3010');
+  assert.equal(keskuskirkko.mcp, 'http://host.docker.internal:3010');
+
+  const kappeli = systems.get('kappeli');
+  assert.ok(kappeli);
+  assert.equal(kappeli.canva, 'http://host.docker.internal:3020');
+  assert.equal(kappeli.picontrol, 'http://host.docker.internal:3020');
+  assert.equal(kappeli.mcp, 'http://host.docker.internal:3020');
+});
+
+test('Media relay self-registers in Tunnus Discovery and updates advertised venues', async () => {
+  let registeredService = null;
+  const mockDiscoveryServer = http.createServer((req, res) => {
+    if (req.url === '/api/v1/discovery' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        updated_at: new Date().toISOString(),
+        services: [
+          {
+            id: 'keskuskirkko-pi',
+            name: 'Keskuskirkko Pi System',
+            type: 'pi-system',
+            venue: 'keskuskirkko',
+            endpoint_url: 'http://127.0.0.1:3010'
+          }
+        ]
+      }));
+      return;
+    }
+    if (req.url === '/api/v1/discovery/services/media-relay' && req.method === 'PUT') {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        registeredService = JSON.parse(body);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, service: registeredService }));
+      });
+      return;
+    }
+    res.writeHead(404).end();
+  });
+  await new Promise((r) => mockDiscoveryServer.listen(0, '127.0.0.1', r));
+  const discoveryPort = mockDiscoveryServer.address().port;
+
+  const store = openStore(':memory:');
+  const router = createTunnelRouter({
+    db: store.db,
+    discoveryServiceUrl: `http://127.0.0.1:${discoveryPort}/api/v1/discovery`,
+    discoveryPollIntervalSeconds: 0,
+    publicUrl: 'https://media.riihimaenseurakunta.fi'
+  });
+
+  const app = express();
+  app.use(router);
+  const server = http.createServer(app);
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const relayPort = server.address().port;
+
+  try {
+    // 1. Trigger sync which pulls Pi systems AND registers media-relay in Tunnus Discovery
+    const syncRes = await fetch(`http://127.0.0.1:${relayPort}/api/v1/discovery/sync`, { method: 'POST' });
+    assert.equal(syncRes.status, 200);
+    const syncJson = await syncRes.json();
+    assert.equal(syncJson.ok, true);
+
+    // 2. Verify media-relay advertised its service definition and relayed venues to Tunnus
+    assert.ok(registeredService);
+    assert.equal(registeredService.id, 'media-relay');
+    assert.equal(registeredService.type, 'media-relay');
+    assert.equal(registeredService.endpoint_url, 'https://media.riihimaenseurakunta.fi');
+    assert.ok(registeredService.capabilities.includes('pi_tunnel_router'));
+    assert.ok(registeredService.capabilities.includes('canva_proxy'));
+    assert.ok(registeredService.metadata.relayed_systems.includes('keskuskirkko'));
+    assert.equal(
+      registeredService.metadata.venues.keskuskirkko.canva_url,
+      'https://media.riihimaenseurakunta.fi/pi/keskuskirkko/canva'
+    );
+
+    // 3. Manual self-registration endpoint also works
+    const regRes = await fetch(`http://127.0.0.1:${relayPort}/api/v1/discovery/register`, { method: 'POST' });
+    assert.equal(regRes.status, 200);
+    const regJson = await regRes.json();
+    assert.equal(regJson.ok, true);
+  } finally {
+    await new Promise((r) => server.close(r));
+    await new Promise((r) => mockDiscoveryServer.close(r));
+  }
+});
+

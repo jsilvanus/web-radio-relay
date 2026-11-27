@@ -372,6 +372,9 @@ app.use(createTunnelRouter({
   relayApiToken: RELAY_API_TOKEN,
   discoveryServiceUrl: process.env.DISCOVERY_SERVICE_URL || process.env.TUNNUS_DISCOVERY_URL,
   discoveryToken: process.env.DISCOVERY_TOKEN || process.env.TUNNUS_TOKEN,
+  discoveryClientId: process.env.DISCOVERY_CLIENT_ID || process.env.OIDC_CLIENT_ID,
+  discoveryClientSecret: process.env.DISCOVERY_CLIENT_SECRET || process.env.OIDC_CLIENT_SECRET,
+  publicUrl: process.env.PUBLIC_URL,
   canvaTunnelUrl: CANVA_TUNNEL_URL,
   picontrolTunnelUrl: PICONTROL_TUNNEL_URL,
   picontrolMcpTunnelUrl: PICONTROL_MCP_TUNNEL_URL
