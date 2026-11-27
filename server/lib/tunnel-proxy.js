@@ -40,8 +40,19 @@ export function normalizeTunnelUrl(value) {
  * @returns {string}
  */
 export function rewriteTunnelPath(originalPath, target) {
-  const [pathname, search] = String(originalPath || '/').split('?');
+  let [pathname, search] = String(originalPath || '/').split('?');
   const query = search ? `?${search}` : '';
+
+  // Strip subpath prefix if request passed through without Traefik stripprefix
+  if (pathname.startsWith('/relay/')) {
+    pathname = pathname.slice('/relay'.length);
+  } else if (pathname === '/relay') {
+    pathname = '/';
+  } else if (pathname.startsWith('/media/')) {
+    pathname = pathname.slice('/media'.length);
+  } else if (pathname === '/media') {
+    pathname = '/';
+  }
 
   if (target === 'canva') {
     if (pathname === '/canva' || pathname === '/canva/') {
@@ -230,6 +241,20 @@ export function proxyToTunnel(req, res, targetBaseUrl, options = {}) {
  */
 export function createTunnelRouter(options = {}) {
   const router = express.Router();
+
+  // Support subpath staging prefix (e.g. /relay or /media) if not already stripped upstream
+  router.use((req, _res, next) => {
+    if (req.url.startsWith('/relay/')) {
+      req.url = req.url.slice('/relay'.length);
+    } else if (req.url === '/relay') {
+      req.url = '/';
+    } else if (req.url.startsWith('/media/')) {
+      req.url = req.url.slice('/media'.length);
+    } else if (req.url === '/media') {
+      req.url = '/';
+    }
+    next();
+  });
   const canvaUrl = normalizeTunnelUrl(options.canvaTunnelUrl ?? process.env.CANVA_TUNNEL_URL);
   const picontrolUrl = normalizeTunnelUrl(options.picontrolTunnelUrl ?? process.env.PICONTROL_TUNNEL_URL);
   const picontrolMcpUrl = normalizeTunnelUrl(options.picontrolMcpTunnelUrl ?? process.env.PICONTROL_MCP_TUNNEL_URL);

@@ -211,8 +211,24 @@ test('tunnel router proxies requests and bodies to upstream', async () => {
     assert.equal(receivedMethod, 'GET');
     assert.equal(receivedPath, '/mcp/tools');
     assert.equal(receivedAuth, 'Bearer mcp-token');
+
+    // Test subpath proxying (e.g. /relay/canva/push or /media/control/api/v1/status)
+    const subpathRes = await fetch(`http://127.0.0.1:${port}/relay/canva/push`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subpathTest: true })
+    });
+    assert.equal(subpathRes.status, 200);
+    assert.equal(receivedPath, '/api/v1/canva/push');
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await new Promise((resolve) => mockUpstream.close(resolve));
   }
+});
+
+test('rewriteTunnelPath supports subpath prefixes like /relay and /media', () => {
+  assert.equal(rewriteTunnelPath('/relay/canva/push', 'canva'), '/api/v1/canva/push');
+  assert.equal(rewriteTunnelPath('/media/canva/status', 'canva'), '/api/v1/canva/status');
+  assert.equal(rewriteTunnelPath('/relay/control/api/status', 'picontrol'), '/api/status');
+  assert.equal(rewriteTunnelPath('/media/mcp/sse', 'mcp'), '/mcp/sse');
 });
