@@ -6,6 +6,8 @@ import {
   normalizeTunnelUrl,
   rewriteTunnelPath,
   setCanvaCorsHeaders,
+  parsePiSystems,
+  resolveTargetSystem,
   createTunnelRouter
 } from '../lib/tunnel-proxy.js';
 
@@ -231,4 +233,134 @@ test('rewriteTunnelPath supports subpath prefixes like /relay and /media', () =>
   assert.equal(rewriteTunnelPath('/media/canva/status', 'canva'), '/api/v1/canva/status');
   assert.equal(rewriteTunnelPath('/relay/control/api/status', 'picontrol'), '/api/status');
   assert.equal(rewriteTunnelPath('/media/mcp/sse', 'mcp'), '/mcp/sse');
+});
+
+test('parsePiSystems handles JSON and env conventions', () => {
+  const parsed = parsePiSystems({
+    systems: {
+      keskuskirkko: {
+        canva: 'http://127.0.0.1:3010',
+        picontrol: 'http://127.0.0.1:3012',
+        mcp: 'http://127.0.0.1:3601'
+      },
+      kappeli: {
+        canva: 'http://127.0.0.1:3020',
+        picontrol: 'http://127.0.0.1:3022',
+        mcp: 'http://127.0.0.1:3602'
+      }
+    }
+  });
+
+  assert.equal(parsed.defaultSystemId, 'keskuskirkko');
+  assert.equal(parsed.systems.size, 2);
+  assert.equal(parsed.systems.get('keskuskirkko').canva, 'http://127.0.0.1:3010');
+  assert.equal(parsed.systems.get('kappeli').picontrol, 'http://127.0.0.1:3022');
+});
+
+test('resolveTargetSystem resolves by path, header, query and default', () => {
+  const systems = new Map([
+    ['keskuskirkko', { canva: 'http://127.0.0.1:3010', picontrol: '', mcp: '' }],
+    ['kappeli', { canva: 'http://127.0.0.1:3020', picontrol: '', mcp: '' }]
+  ]);
+
+  // Path resolution
+  const pathRes = resolveTargetSystem({ url: '/pi/kappeli/canva/push', headers: {} }, systems, 'keskuskirkko');
+  assert.equal(pathRes.systemId, 'kappeli');
+  assert.ok(pathRes.system);
+
+  // Header resolution
+  const headerRes = resolveTargetSystem({ url: '/canva/push', headers: { 'x-pi-target': 'kappeli' } }, systems, 'keskuskirkko');
+  assert.equal(headerRes.systemId, 'kappeli');
+
+  // Query resolution
+  const queryRes = resolveTargetSystem({ url: '/canva/push', query: { pi: 'kappeli' }, headers: {} }, systems, 'keskuskirkko');
+  assert.equal(queryRes.systemId, 'kappeli');
+
+  // Default fallback
+  const defaultRes = resolveTargetSystem({ url: '/canva/push', headers: {} }, systems, 'keskuskirkko');
+  assert.equal(defaultRes.systemId, 'keskuskirkko');
+});
+
+test('multi-system router routes to separate upstream Pi tunnels', async () => {
+  let capturedKeskuskirkko = null;
+  let capturedKappeli = null;
+
+  // Mock Keskuskirkko upstream
+  const mockKeskuskirkko = http.createServer((req, res) => {
+    capturedKeskuskirkko = { method: req.method, path: req.url };
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ location: 'keskuskirkko' }));
+  });
+  await new Promise((r) => mockKeskuskirkko.listen(0, '127.0.0.1', r));
+  const portKeskuskirkko = mockKeskuskirkko.address().port;
+
+  // Mock Kappeli upstream
+  const mockKappeli = http.createServer((req, res) => {
+    capturedKappeli = { method: req.method, path: req.url };
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ location: 'kappeli' }));
+  });
+  await new Promise((r) => mockKappeli.listen(0, '127.0.0.1', r));
+  const portKappeli = mockKappeli.address().port;
+
+  const router = createTunnelRouter({
+    systems: {
+      keskuskirkko: {
+        canva: `http://127.0.0.1:${portKeskuskirkko}`,
+        picontrol: `http://127.0.0.1:${portKeskuskirkko}`,
+        mcp: `http://127.0.0.1:${portKeskuskirkko}`
+      },
+      kappeli: {
+        canva: `http://127.0.0.1:${portKappeli}`,
+        picontrol: `http://127.0.0.1:${portKappeli}`,
+        mcp: `http://127.0.0.1:${portKappeli}`
+      }
+    }
+  });
+
+  const app = express();
+  app.use(router);
+
+  const server = http.createServer(app);
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const relayPort = server.address().port;
+
+  try {
+    // 1. Status lists both systems
+    const statusRes = await fetch(`http://127.0.0.1:${relayPort}/api/v1/tunnels/status`);
+    const statusData = await statusRes.json();
+    assert.equal(statusData.totalSystems, 2);
+    assert.ok(statusData.systems.keskuskirkko);
+    assert.ok(statusData.systems.kappeli);
+
+    // 2. Request to default goes to Keskuskirkko
+    const defaultReq = await fetch(`http://127.0.0.1:${relayPort}/canva/status`);
+    const defaultData = await defaultReq.json();
+    assert.equal(defaultData.location, 'keskuskirkko');
+    assert.equal(capturedKeskuskirkko.path, '/api/v1/canva/status');
+
+    // 3. Request to /pi/kappeli goes to Kappeli upstream
+    const kappeliReq = await fetch(`http://127.0.0.1:${relayPort}/pi/kappeli/canva/status`);
+    const kappeliData = await kappeliReq.json();
+    assert.equal(kappeliData.location, 'kappeli');
+    assert.equal(capturedKappeli.path, '/api/v1/canva/status');
+
+    // 4. Request with X-Pi-Target: kappeli header goes to Kappeli upstream
+    const headerReq = await fetch(`http://127.0.0.1:${relayPort}/control/api/v1/items`, {
+      headers: { 'X-Pi-Target': 'kappeli' }
+    });
+    const headerData = await headerReq.json();
+    assert.equal(headerData.location, 'kappeli');
+    assert.equal(capturedKappeli.path, '/api/v1/items');
+
+    // 5. Unknown Pi system returns 404
+    const unknownReq = await fetch(`http://127.0.0.1:${relayPort}/pi/unknown-church/canva/status`);
+    assert.equal(unknownReq.status, 404);
+    const unknownData = await unknownReq.json();
+    assert.equal(unknownData.code, 'UNKNOWN_PI_SYSTEM');
+  } finally {
+    await new Promise((r) => server.close(r));
+    await new Promise((r) => mockKeskuskirkko.close(r));
+    await new Promise((r) => mockKappeli.close(r));
+  }
 });

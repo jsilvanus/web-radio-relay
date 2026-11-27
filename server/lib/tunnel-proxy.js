@@ -54,6 +54,12 @@ export function rewriteTunnelPath(originalPath, target) {
     pathname = '/';
   }
 
+  // Strip /pi/:system prefix if present
+  const piMatch = pathname.match(/^\/pi\/[a-zA-Z0-9_-]+(\/.*|$)/);
+  if (piMatch) {
+    pathname = piMatch[1] || '/';
+  }
+
   if (target === 'canva') {
     if (pathname === '/canva' || pathname === '/canva/') {
       return `/api/v1/canva/status${query}`;
@@ -230,17 +236,127 @@ export function proxyToTunnel(req, res, targetBaseUrl, options = {}) {
 }
 
 /**
- * Creates an Express router that mounts Canva, PiControl, and PiControl MCP tunnel routing.
+ * Parses and normalizes configurations for multiple Pi systems.
+ * Supports:
+ *   1. Explicit options.systems or options.piSystems (object or JSON string)
+ *   2. Environment variable PI_SYSTEMS (JSON string)
+ *   3. Convention environment variables: PI_<NAME>_CANVA_TUNNEL_URL, etc.
+ *   4. Single-system fallback (CANVA_TUNNEL_URL, PICONTROL_TUNNEL_URL, PICONTROL_MCP_TUNNEL_URL)
+ *
+ * @param {object} options
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {{ defaultSystemId: string, systems: Map<string, { canva: string, picontrol: string, mcp: string }> }}
+ */
+export function parsePiSystems(options = {}, env = process.env) {
+  const systems = new Map();
+
+  // 1. JSON config input
+  const systemsInput = options.systems ?? options.piSystems ?? env.PI_SYSTEMS;
+  if (systemsInput) {
+    try {
+      const parsed = typeof systemsInput === 'string' ? JSON.parse(systemsInput) : systemsInput;
+      if (parsed && typeof parsed === 'object') {
+        for (const [id, cfg] of Object.entries(parsed)) {
+          if (!id || typeof cfg !== 'object') continue;
+          systems.set(id.toLowerCase(), {
+            canva: normalizeTunnelUrl(cfg.canva || cfg.canvaTunnelUrl),
+            picontrol: normalizeTunnelUrl(cfg.picontrol || cfg.picontrolTunnelUrl),
+            mcp: normalizeTunnelUrl(cfg.mcp || cfg.picontrolMcpTunnelUrl)
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('[tunnel-proxy] Failed to parse PI_SYSTEMS JSON:', e.message);
+    }
+  }
+
+  // 2. Convention environment variables: PI_<NAME>_(CANVA|PICONTROL|MCP)_TUNNEL_URL
+  for (const [key, value] of Object.entries(env)) {
+    const match = key.match(/^PI_([A-Z0-9_]+)_(CANVA|PICONTROL|MCP)_TUNNEL_URL$/);
+    if (match) {
+      const id = match[1].toLowerCase().replace(/_/g, '-');
+      const kind = match[2].toLowerCase();
+      if (!systems.has(id)) {
+        systems.set(id, { canva: '', picontrol: '', mcp: '' });
+      }
+      const entry = systems.get(id);
+      entry[kind] = normalizeTunnelUrl(value);
+    }
+  }
+
+  // 3. Single-system default fallback
+  const defaultSystemId = (options.defaultSystemId || env.DEFAULT_PI_SYSTEM || 'keskuskirkko').toLowerCase();
+  const defaultCanva = normalizeTunnelUrl(options.canvaTunnelUrl ?? env.CANVA_TUNNEL_URL);
+  const defaultPicontrol = normalizeTunnelUrl(options.picontrolTunnelUrl ?? env.PICONTROL_TUNNEL_URL);
+  const defaultMcp = normalizeTunnelUrl(options.picontrolMcpTunnelUrl ?? env.PICONTROL_MCP_TUNNEL_URL);
+
+  if (defaultCanva || defaultPicontrol || defaultMcp || systems.size === 0) {
+    if (!systems.has(defaultSystemId)) {
+      systems.set(defaultSystemId, {
+        canva: defaultCanva,
+        picontrol: defaultPicontrol,
+        mcp: defaultMcp
+      });
+    } else {
+      const entry = systems.get(defaultSystemId);
+      if (!entry.canva) entry.canva = defaultCanva;
+      if (!entry.picontrol) entry.picontrol = defaultPicontrol;
+      if (!entry.mcp) entry.mcp = defaultMcp;
+    }
+  }
+
+  return {
+    defaultSystemId,
+    systems
+  };
+}
+
+/**
+ * Resolves the target Pi system ID from request path, headers, or query params.
+ * @param {import('express').Request} req
+ * @param {Map<string, { canva: string, picontrol: string, mcp: string }>} systemsMap
+ * @param {string} defaultSystemId
+ * @returns {{ systemId: string, system: { canva: string, picontrol: string, mcp: string } | null }}
+ */
+export function resolveTargetSystem(req, systemsMap, defaultSystemId) {
+  let targetId = defaultSystemId;
+  const path = req.originalUrl || req.url || '/';
+
+  // 1. Path routing: /pi/:systemId/...
+  const piMatch = path.match(/^\/pi\/([a-zA-Z0-9_-]+)(\/.*|$)/);
+  if (piMatch) {
+    targetId = piMatch[1].toLowerCase();
+  } else if (req.headers && (req.headers['x-pi-system'] || req.headers['x-pi-target'])) {
+    targetId = String(req.headers['x-pi-system'] || req.headers['x-pi-target']).trim().toLowerCase();
+  } else if (req.query && (req.query.pi || req.query.system)) {
+    targetId = String(req.query.pi || req.query.system).trim().toLowerCase();
+  }
+
+  const system = systemsMap.get(targetId) || null;
+  return {
+    systemId: targetId,
+    system
+  };
+}
+
+/**
+ * Creates an Express router that mounts Canva, PiControl, and PiControl MCP tunnel routing
+ * with support for multiple Pi systems and subpath prefixes.
+ *
  * @param {{
  *   canvaTunnelUrl?: string,
  *   picontrolTunnelUrl?: string,
  *   picontrolMcpTunnelUrl?: string,
+ *   defaultSystemId?: string,
+ *   systems?: object | string,
  *   timeoutMs?: number
  * }} options
  * @returns {express.Router}
  */
 export function createTunnelRouter(options = {}) {
   const router = express.Router();
+  const { defaultSystemId, systems } = parsePiSystems(options);
+  const timeoutMs = options.timeoutMs ?? 30000;
 
   // Support subpath staging prefix (e.g. /relay or /media) if not already stripped upstream
   router.use((req, _res, next) => {
@@ -255,55 +371,119 @@ export function createTunnelRouter(options = {}) {
     }
     next();
   });
-  const canvaUrl = normalizeTunnelUrl(options.canvaTunnelUrl ?? process.env.CANVA_TUNNEL_URL);
-  const picontrolUrl = normalizeTunnelUrl(options.picontrolTunnelUrl ?? process.env.PICONTROL_TUNNEL_URL);
-  const picontrolMcpUrl = normalizeTunnelUrl(options.picontrolMcpTunnelUrl ?? process.env.PICONTROL_MCP_TUNNEL_URL);
-  const timeoutMs = options.timeoutMs ?? 30000;
 
-  // Status endpoint
-  router.get('/api/v1/tunnels/status', (_req, res) => {
-    res.json({
+  const buildStatusResponse = (systemFilter = null) => {
+    const listSystems = systemFilter ? (systems.has(systemFilter) ? [systemFilter] : []) : Array.from(systems.keys());
+    const systemsObj = {};
+    for (const sysId of listSystems) {
+      const cfg = systems.get(sysId);
+      if (!cfg) continue;
+      systemsObj[sysId] = {
+        canva: {
+          configured: Boolean(cfg.canva),
+          target: cfg.canva || null,
+          routes: [`/pi/${sysId}/canva`, `/pi/${sysId}/api/v1/canva`, `/pi/${sysId}/api/v1/graphics/canva`]
+        },
+        picontrol: {
+          configured: Boolean(cfg.picontrol),
+          target: cfg.picontrol || null,
+          routes: [`/pi/${sysId}/control`, `/pi/${sysId}/picontrol`, `/pi/${sysId}/ui/api`]
+        },
+        picontrolMcp: {
+          configured: Boolean(cfg.mcp),
+          target: cfg.mcp || null,
+          routes: [`/pi/${sysId}/mcp`, `/pi/${sysId}/api/v1/mcp`]
+        }
+      };
+    }
+
+    const defaultCfg = systems.get(defaultSystemId) || { canva: '', picontrol: '', mcp: '' };
+
+    return {
+      defaultSystem: defaultSystemId,
+      totalSystems: systems.size,
+      systems: systemsObj,
+      // Backward compatibility fields for single-system clients
       canva: {
-        configured: Boolean(canvaUrl),
-        target: canvaUrl || null,
+        configured: Boolean(defaultCfg.canva),
+        target: defaultCfg.canva || null,
         routes: ['/canva', '/api/v1/canva', '/api/v1/graphics/canva']
       },
       picontrol: {
-        configured: Boolean(picontrolUrl),
-        target: picontrolUrl || null,
+        configured: Boolean(defaultCfg.picontrol),
+        target: defaultCfg.picontrol || null,
         routes: ['/control', '/picontrol', '/ui/api']
       },
       picontrolMcp: {
-        configured: Boolean(picontrolMcpUrl),
-        target: picontrolMcpUrl || null,
+        configured: Boolean(defaultCfg.mcp),
+        target: defaultCfg.mcp || null,
         routes: ['/mcp', '/api/v1/mcp']
       }
-    });
-  });
-
-  // Canva routes
-  const canvaHandler = (req, res) => {
-    proxyToTunnel(req, res, canvaUrl, {
-      rewrite: 'canva',
-      timeoutMs,
-      isCanva: true
-    });
+    };
   };
 
+  // Status endpoints
+  router.get('/api/v1/tunnels/status', (_req, res) => {
+    res.json(buildStatusResponse());
+  });
+
+  router.get('/pi/:systemId/api/v1/tunnels/status', (req, res) => {
+    const sysId = req.params.systemId.toLowerCase();
+    if (!systems.has(sysId)) {
+      res.status(404).json({
+        error: `Pi system '${sysId}' is not registered`,
+        code: 'UNKNOWN_PI_SYSTEM',
+        availableSystems: Array.from(systems.keys())
+      });
+      return;
+    }
+    res.json(buildStatusResponse(sysId));
+  });
+
+  // Handler factory for a service
+  const createServiceHandler = (serviceName, rewriteTarget, isCanva = false, timeout = timeoutMs) => {
+    return (req, res) => {
+      const { systemId, system } = resolveTargetSystem(req, systems, defaultSystemId);
+      if (!system) {
+        res.status(404).json({
+          error: `Pi system '${systemId}' is not registered`,
+          code: 'UNKNOWN_PI_SYSTEM',
+          availableSystems: Array.from(systems.keys())
+        });
+        return;
+      }
+
+      const targetUrl = system[serviceName];
+      if (!targetUrl) {
+        const name = serviceName === 'canva' ? 'Canva' : serviceName === 'mcp' ? 'PiControl-MCP' : 'PiControl';
+        const code = serviceName === 'canva' ? 'CANVA' : serviceName === 'mcp' ? 'PICONTROL_MCP' : 'PICONTROL';
+        res.status(503).json({
+          error: `${name} tunnel is not configured for Pi system '${systemId}'`,
+          code: `${code}_TUNNEL_DISABLED`,
+          systemId
+        });
+        return;
+      }
+
+      proxyToTunnel(req, res, targetUrl, {
+        rewrite: rewriteTarget,
+        timeoutMs: timeout,
+        isCanva
+      });
+    };
+  };
+
+  const canvaHandler = createServiceHandler('canva', 'canva', true);
+  const picontrolHandler = createServiceHandler('picontrol', 'picontrol', false);
+  const picontrolMcpHandler = createServiceHandler('mcp', 'mcp', false, 0);
+
+  // Standard (default system) routes
   router.all('/api/v1/canva', canvaHandler);
   router.all('/api/v1/canva/*', canvaHandler);
   router.all('/api/v1/graphics/canva', canvaHandler);
   router.all('/api/v1/graphics/canva/*', canvaHandler);
   router.all('/canva', canvaHandler);
   router.all('/canva/*', canvaHandler);
-
-  // PiControl routes
-  const picontrolHandler = (req, res) => {
-    proxyToTunnel(req, res, picontrolUrl, {
-      rewrite: 'picontrol',
-      timeoutMs
-    });
-  };
 
   router.all('/control', picontrolHandler);
   router.all('/control/*', picontrolHandler);
@@ -312,18 +492,30 @@ export function createTunnelRouter(options = {}) {
   router.all('/ui/api', picontrolHandler);
   router.all('/ui/api/*', picontrolHandler);
 
-  // PiControl MCP routes
-  const picontrolMcpHandler = (req, res) => {
-    proxyToTunnel(req, res, picontrolMcpUrl, {
-      rewrite: 'mcp',
-      timeoutMs: 0 // MCP streams can be long-lived
-    });
-  };
-
   router.all('/mcp', picontrolMcpHandler);
   router.all('/mcp/*', picontrolMcpHandler);
   router.all('/api/v1/mcp', picontrolMcpHandler);
   router.all('/api/v1/mcp/*', picontrolMcpHandler);
+
+  // Multi-Pi system routes (/pi/:systemId/...)
+  router.all('/pi/:systemId/canva', canvaHandler);
+  router.all('/pi/:systemId/canva/*', canvaHandler);
+  router.all('/pi/:systemId/api/v1/canva', canvaHandler);
+  router.all('/pi/:systemId/api/v1/canva/*', canvaHandler);
+  router.all('/pi/:systemId/api/v1/graphics/canva', canvaHandler);
+  router.all('/pi/:systemId/api/v1/graphics/canva/*', canvaHandler);
+
+  router.all('/pi/:systemId/control', picontrolHandler);
+  router.all('/pi/:systemId/control/*', picontrolHandler);
+  router.all('/pi/:systemId/picontrol', picontrolHandler);
+  router.all('/pi/:systemId/picontrol/*', picontrolHandler);
+  router.all('/pi/:systemId/ui/api', picontrolHandler);
+  router.all('/pi/:systemId/ui/api/*', picontrolHandler);
+
+  router.all('/pi/:systemId/mcp', picontrolMcpHandler);
+  router.all('/pi/:systemId/mcp/*', picontrolMcpHandler);
+  router.all('/pi/:systemId/api/v1/mcp', picontrolMcpHandler);
+  router.all('/pi/:systemId/api/v1/mcp/*', picontrolMcpHandler);
 
   return router;
 }
