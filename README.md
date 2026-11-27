@@ -554,7 +554,13 @@ Copy `.env.example` to `.env` and override only what you need.
 | `STALE_MS` | `30000` | Milliseconds after the last manifest update before the stream is considered off-air |
 | `ARCHIVE_URL_PREFIX` | `/archive` | URL prefix for archive download links in `GET /api/archive` — set to your full public URL when behind a reverse proxy |
 | `RELAY_API_TOKEN` | *(unset)* | Bearer token for the control API (`/api/v1/*`). Unset means those routes answer 503 (fail closed). Generate with `openssl rand -hex 32` |
-| `RELAY_DB_PATH` | `/var/lib/relay/relay.db` | SQLite database file (streams, tokens, destinations, recordings, events). The parent directory is created when missing. Compose mounts the `relay-data` volume at `/var/lib/relay`. Tests use `:memory:` |
+| `DATABASE_URL` | *(unset)* | PostgreSQL connection URL (e.g. `postgres://media_relay_user:pass@pg.shared.local:5432/media_relay_prod`). When set or when `DB_HOST` is set, PostgreSQL is used instead of SQLite. Automatically runs migrations on startup |
+| `DB_HOST` | *(unset)* | PostgreSQL server host (e.g. `pg.shared.local`). Unset uses SQLite |
+| `DB_PORT` | `5432` | PostgreSQL server port |
+| `DB_NAME` | `media_relay_prod` | PostgreSQL database name |
+| `DB_USER` | `media_relay_user` | PostgreSQL username |
+| `DB_PASSWORD` | *(unset)* | PostgreSQL password |
+| `RELAY_DB_PATH` | `/var/lib/relay/relay.db` | SQLite database file (streams, tokens, destinations, recordings, events, pi_systems) used when PostgreSQL is not configured. The parent directory is created when missing. Compose mounts the `relay-data` volume at `/var/lib/relay`. Tests use `:memory:` |
 | `ASSET_DIR` | `/var/lib/relay/assets` | Directory for uploaded image assets when S3 is off. Created on the first upload. Files are named by their hash |
 | `RELAY_SECRET_KEY` | *(unset)* | 64 hex chars, `openssl rand -hex 32`; encrypts destination stream keys at rest; never commit |
 | `MAX_DESTINATIONS_PER_STREAM` | `6` | Most egress destinations one stream may have; a create beyond it answers 409 |

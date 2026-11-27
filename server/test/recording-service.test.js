@@ -180,7 +180,7 @@ test('start spawns the recorder, records a row, and a second start returns the s
 
     const args = env.fake.children[0].args;
     assert.ok(args.includes(`rtsp://relay.example.com:8554/live/main`));
-    assert.ok(args.includes(path.join(env.spoolDir, first.sessionId, '%06d.mp4')));
+    assert.ok(args.includes(`${env.spoolDir}/${first.sessionId}/%06d.mp4`) || args.includes(path.join(env.spoolDir, first.sessionId, '%06d.mp4')));
     assert.ok(fs.statSync(path.join(env.spoolDir, first.sessionId)).isDirectory());
 
     const second = env.service.start('main');

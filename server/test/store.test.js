@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MIGRATIONS, migrate, openStore } from '../lib/store.js';
+import { MIGRATIONS, migrate, openStore, toPgSql, resolveDatabaseTarget } from '../lib/store.js';
 
-const TABLES = ['destinations', 'events', 'recordings', 'schema_version', 'streams', 'tokens'];
+const TABLES = ['destinations', 'events', 'pi_systems', 'recordings', 'schema_version', 'streams', 'tokens'];
 
 function tableNames(db) {
   return db
@@ -27,7 +27,7 @@ test('in-memory store creates all tables at the latest version', () => {
   try {
     assert.deepEqual(tableNames(db), TABLES);
     assert.deepEqual(version(db), [MIGRATIONS.length]);
-    assert.equal(MIGRATIONS.length, 2);
+    assert.equal(MIGRATIONS.length, 3);
   } finally {
     close();
   }
@@ -164,3 +164,39 @@ test('destinations are unique per stream and name', () => {
     close();
   }
 });
+
+test('toPgSql translates positional parameters and clauses', () => {
+  assert.equal(
+    toPgSql('SELECT * FROM tokens WHERE hash = ? AND id = ?'),
+    'SELECT * FROM tokens WHERE hash = $1 AND id = $2',
+  );
+
+  assert.equal(
+    toPgSql('INSERT OR IGNORE INTO streams (name, created_at) VALUES (?, ?)'),
+    'INSERT INTO streams (name, created_at) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING',
+  );
+
+  assert.equal(
+    toPgSql('INSERT OR IGNORE INTO events (stream, type) VALUES (?, ?)'),
+    'INSERT INTO events (stream, type) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+  );
+});
+
+test('resolveDatabaseTarget detects postgres and sqlite configs', () => {
+  const pgUrl = resolveDatabaseTarget({ DATABASE_URL: 'postgres://user:pass@pg.local/relay' });
+  assert.deepEqual(pgUrl, { type: 'postgres', connectionString: 'postgres://user:pass@pg.local/relay' });
+
+  const pgHost = resolveDatabaseTarget({ DB_HOST: 'pg.shared.local', DB_USER: 'media_relay_user', DB_PASSWORD: 'secretpassword' });
+  assert.deepEqual(pgHost, {
+    type: 'postgres',
+    host: 'pg.shared.local',
+    port: 5432,
+    database: 'media_relay_prod',
+    user: 'media_relay_user',
+    password: 'secretpassword',
+  });
+
+  const sqliteEnv = resolveDatabaseTarget({ RELAY_DB_PATH: '/custom/path/db.sqlite' });
+  assert.deepEqual(sqliteEnv, { type: 'sqlite', path: '/custom/path/db.sqlite' });
+});
+

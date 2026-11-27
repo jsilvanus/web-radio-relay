@@ -1,7 +1,11 @@
-// SQLite store (node:sqlite). Schema is owned here; no I/O is wired into index.js yet.
+// SQLite store (node:sqlite) and PostgreSQL store adapter.
+// Supports node:sqlite for development/tests and PostgreSQL for production cluster.
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { openPgStore, PG_MIGRATIONS, toPgSql } from './pg-store.js';
+
+export { openPgStore, PG_MIGRATIONS, toPgSql };
 
 export const DEFAULT_DB_PATH = '/var/lib/relay/relay.db';
 
@@ -103,7 +107,24 @@ export function migrate(db, migrations = MIGRATIONS) {
   return db;
 }
 
-export function openStore(path = process.env.RELAY_DB_PATH || DEFAULT_DB_PATH) {
+export function resolveDatabaseTarget(env = process.env) {
+  if (env.DATABASE_URL) {
+    return { type: 'postgres', connectionString: env.DATABASE_URL };
+  }
+  if (env.DB_HOST) {
+    return {
+      type: 'postgres',
+      host: env.DB_HOST,
+      port: Number(env.DB_PORT) || 5432,
+      database: env.DB_NAME || 'media_relay_prod',
+      user: env.DB_USER || 'media_relay_user',
+      password: env.DB_PASSWORD || '',
+    };
+  }
+  return { type: 'sqlite', path: env.RELAY_DB_PATH || DEFAULT_DB_PATH };
+}
+
+export function openSqliteStore(path = process.env.RELAY_DB_PATH || DEFAULT_DB_PATH) {
   const memory = path === ':memory:';
   if (!memory) mkdirSync(dirname(path), { recursive: true });
 
@@ -123,4 +144,28 @@ export function openStore(path = process.env.RELAY_DB_PATH || DEFAULT_DB_PATH) {
       db.close();
     },
   };
+}
+
+export function openStore(target) {
+  if (target === undefined) {
+    target = (process.env.DATABASE_URL || (process.env.DB_HOST && !process.env.RELAY_DB_PATH))
+      ? resolveDatabaseTarget()
+      : (process.env.RELAY_DB_PATH || DEFAULT_DB_PATH);
+  }
+
+  if (typeof target === 'object' && target !== null) {
+    if (target.type === 'postgres' || target.connectionString || target.host) {
+      return openPgStore(target.connectionString || target);
+    }
+    if (target.type === 'sqlite' && target.path) {
+      return openSqliteStore(target.path);
+    }
+  }
+  if (typeof target === 'string') {
+    if (target.startsWith('postgres://') || target.startsWith('postgresql://')) {
+      return openPgStore(target);
+    }
+    return openSqliteStore(target);
+  }
+  return openSqliteStore(DEFAULT_DB_PATH);
 }
