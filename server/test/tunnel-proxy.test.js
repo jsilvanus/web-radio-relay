@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import express from 'express';
+import { openStore } from '../lib/store.js';
+import { normalizeLocalPortUrl, mapDiscoveryToPiSystems } from '../lib/discovery-client.js';
 import {
   normalizeTunnelUrl,
   rewriteTunnelPath,
@@ -362,5 +364,292 @@ test('multi-system router routes to separate upstream Pi tunnels', async () => {
     await new Promise((r) => server.close(r));
     await new Promise((r) => mockKeskuskirkko.close(r));
     await new Promise((r) => mockKappeli.close(r));
+  }
+});
+
+test('Pi self-registration with token, tunnel ports, venue info and SQLite persistence', async () => {
+  const store = openStore(':memory:');
+  const db = store.db;
+  const relayToken = 'secret-relay-token-12345';
+
+  let capturedUpstreamRequest = null;
+  const mockPiUpstream = http.createServer((req, res) => {
+    capturedUpstreamRequest = { method: req.method, path: req.url };
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true, message: 'Hello from Pi sanctuary' }));
+  });
+  await new Promise((r) => mockPiUpstream.listen(0, '127.0.0.1', r));
+  const upstreamPort = mockPiUpstream.address().port;
+
+  const router = createTunnelRouter({
+    db,
+    relayApiToken: relayToken
+  });
+
+  const app = express();
+  app.use(router);
+
+  const server = http.createServer(app);
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const relayPort = server.address().port;
+
+  try {
+    // 1. Registration fails without auth
+    const unauthRes = await fetch(`http://127.0.0.1:${relayPort}/api/v1/tunnels/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'keskuskirkko' })
+    });
+    assert.equal(unauthRes.status, 401);
+
+    // 2. Pi self-registers with token, tunnel ports and venue information
+    const venueData = {
+      profile: 'keskuskirkko',
+      sanctuary: 'Main Sanctuary',
+      matrix: {
+        inputs: { 3: 'PiPGM1', 4: 'PiPGM2' },
+        outputs: { 1: 'Projector Left', 2: 'Projector Right' }
+      },
+      projectors: ['proj1', 'proj2'],
+      atem: { ip: '192.168.1.100' }
+    };
+
+    const registerRes = await fetch(`http://127.0.0.1:${relayPort}/api/v1/tunnels/register`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${relayToken}`
+      },
+      body: JSON.stringify({
+        id: 'keskuskirkko',
+        name: 'Riihimäen Keskuskirkko',
+        tunnels: {
+          canva: `http://127.0.0.1:${upstreamPort}`,
+          picontrol: `http://127.0.0.1:${upstreamPort}`,
+          mcp: `http://127.0.0.1:${upstreamPort}`
+        },
+        venue: venueData
+      })
+    });
+    assert.equal(registerRes.status, 201);
+    const regJson = await registerRes.json();
+    assert.equal(regJson.ok, true);
+    assert.equal(regJson.system.id, 'keskuskirkko');
+    assert.equal(regJson.system.venue.profile, 'keskuskirkko');
+
+    // 3. Immediately routes traffic to the newly registered Pi system
+    const canvaPushRes = await fetch(`http://127.0.0.1:${relayPort}/pi/keskuskirkko/canva/push`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pages: [1] })
+    });
+    assert.equal(canvaPushRes.status, 200);
+    assert.equal(capturedUpstreamRequest.path, '/api/v1/canva/push');
+
+    // 4. Query systems list
+    const listRes = await fetch(`http://127.0.0.1:${relayPort}/api/v1/systems`);
+    assert.equal(listRes.status, 200);
+    const listJson = await listRes.json();
+    assert.equal(listJson.total, 1);
+    assert.equal(listJson.systems[0].id, 'keskuskirkko');
+    assert.equal(listJson.systems[0].hasVenue, true);
+
+    // 5. Query system venue endpoint
+    const venueRes = await fetch(`http://127.0.0.1:${relayPort}/api/v1/systems/keskuskirkko/venue`);
+    assert.equal(venueRes.status, 200);
+    const venueJson = await venueRes.json();
+    assert.equal(venueJson.profile, 'keskuskirkko');
+    assert.deepEqual(venueJson.projectors, ['proj1', 'proj2']);
+
+    // 6. Heartbeat keeps lastSeenAt updated
+    const hbRes = await fetch(`http://127.0.0.1:${relayPort}/api/v1/tunnels/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${relayToken}`
+      },
+      body: JSON.stringify({ id: 'keskuskirkko' })
+    });
+    assert.equal(hbRes.status, 200);
+
+    // 7. Verify SQLite persistence by re-creating router with same db
+    const router2 = createTunnelRouter({ db, relayApiToken: relayToken });
+    const app2 = express();
+    app2.use(router2);
+    const server2 = http.createServer(app2);
+    await new Promise((r) => server2.listen(0, '127.0.0.1', r));
+    const port2 = server2.address().port;
+
+    try {
+      const persistedRes = await fetch(`http://127.0.0.1:${port2}/api/v1/systems/keskuskirkko`);
+      assert.equal(persistedRes.status, 200);
+      const persistedJson = await persistedRes.json();
+      assert.equal(persistedJson.id, 'keskuskirkko');
+      assert.equal(persistedJson.venue.profile, 'keskuskirkko');
+    } finally {
+      await new Promise((r) => server2.close(r));
+    }
+  } finally {
+    await new Promise((r) => server.close(r));
+    await new Promise((r) => mockPiUpstream.close(r));
+  }
+});
+
+test('normalizeLocalPortUrl normalizes ports and loopback addresses to host.docker.internal', () => {
+  assert.equal(normalizeLocalPortUrl(3010), 'http://host.docker.internal:3010');
+  assert.equal(normalizeLocalPortUrl('3012'), 'http://host.docker.internal:3012');
+  assert.equal(normalizeLocalPortUrl(':3601'), 'http://host.docker.internal:3601');
+  assert.equal(normalizeLocalPortUrl('http://127.0.0.1:3010/'), 'http://host.docker.internal:3010');
+  assert.equal(normalizeLocalPortUrl('http://localhost:3012'), 'http://host.docker.internal:3012');
+  assert.equal(normalizeLocalPortUrl('https://example.com/canva'), 'https://example.com/canva');
+});
+
+test('mapDiscoveryToPiSystems extracts venues, loop-bound tunnel ports and profiles', () => {
+  const discoveryCatalog = {
+    updated_at: '2026-11-27T07:00:00Z',
+    services: [
+      {
+        id: 'keskuskirkko-pi',
+        name: 'Keskuskirkko — Sali (Pi Program)',
+        type: 'piprogram',
+        venue: 'keskuskirkko',
+        metadata: {
+          tunnels: {
+            canva: 3010,
+            picontrol: 3012,
+            mcp: 3601
+          },
+          venue: {
+            profile: 'keskuskirkko',
+            sanctuary: 'Main'
+          }
+        }
+      },
+      {
+        id: 'kappeli-pi',
+        name: 'Kappeli Edge Pi',
+        type: 'piecosystem',
+        venue: 'kappeli',
+        metadata: {
+          ports: {
+            canva: '3020',
+            picontrol: '3022',
+            mcp: '3602'
+          },
+          venue_profile: {
+            profile: 'kappeli'
+          }
+        }
+      }
+    ]
+  };
+
+  const systems = mapDiscoveryToPiSystems(discoveryCatalog);
+  assert.equal(systems.size, 2);
+
+  const keskuskirkko = systems.get('keskuskirkko');
+  assert.ok(keskuskirkko);
+  assert.equal(keskuskirkko.canva, 'http://host.docker.internal:3010');
+  assert.equal(keskuskirkko.picontrol, 'http://host.docker.internal:3012');
+  assert.equal(keskuskirkko.mcp, 'http://host.docker.internal:3601');
+  assert.equal(keskuskirkko.venue.profile, 'keskuskirkko');
+
+  const kappeli = systems.get('kappeli');
+  assert.ok(kappeli);
+  assert.equal(kappeli.canva, 'http://host.docker.internal:3020');
+  assert.equal(kappeli.picontrol, 'http://host.docker.internal:3022');
+  assert.equal(kappeli.mcp, 'http://host.docker.internal:3602');
+  assert.equal(kappeli.venue.profile, 'kappeli');
+});
+
+test('pulling discovery catalog registers Pi systems and routes traffic', async () => {
+  let capturedUpstream = null;
+  const mockUpstream = http.createServer((req, res) => {
+    capturedUpstream = { path: req.url, method: req.method };
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ routed: true, target: 'mockUpstream' }));
+  });
+  await new Promise((r) => mockUpstream.listen(0, '0.0.0.0', r));
+  const upstreamPort = mockUpstream.address().port;
+
+  // Mock Tunnus / OIDC discovery server
+  const mockDiscoveryServer = http.createServer((req, res) => {
+    if (req.url === '/api/v1/discovery') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        updated_at: new Date().toISOString(),
+        services: [
+          {
+            id: 'keskuskirkko-node',
+            name: 'Keskuskirkko Pi',
+            type: 'pigateway',
+            venue: 'keskuskirkko',
+            metadata: {
+              tunnels: {
+                canva: `http://127.0.0.1:${upstreamPort}`,
+                picontrol: `http://127.0.0.1:${upstreamPort}`,
+                mcp: `http://127.0.0.1:${upstreamPort}`
+              },
+              venue: {
+                sanctuary: 'Main Church',
+                matrix: { inputs: [1, 2, 3, 4] }
+              }
+            }
+          }
+        ]
+      }));
+      return;
+    }
+    res.writeHead(404).end();
+  });
+  await new Promise((r) => mockDiscoveryServer.listen(0, '127.0.0.1', r));
+  const discoveryPort = mockDiscoveryServer.address().port;
+
+  const store = openStore(':memory:');
+  const router = createTunnelRouter({
+    db: store.db,
+    discoveryServiceUrl: `http://127.0.0.1:${discoveryPort}/api/v1/discovery`,
+    discoveryPollIntervalSeconds: 0 // manual sync in test
+  });
+
+  const app = express();
+  app.use(router);
+  const server = http.createServer(app);
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const relayPort = server.address().port;
+
+  try {
+    // 1. Check discovery status
+    const statusRes = await fetch(`http://127.0.0.1:${relayPort}/api/v1/discovery/status`);
+    const statusJson = await statusRes.json();
+    assert.equal(statusJson.configured, true);
+    assert.equal(statusJson.discoveryUrl, `http://127.0.0.1:${discoveryPort}/api/v1/discovery`);
+
+    // 2. Trigger manual sync from discovery service
+    const syncRes = await fetch(`http://127.0.0.1:${relayPort}/api/v1/discovery/sync`, { method: 'POST' });
+    assert.equal(syncRes.status, 200);
+    const syncJson = await syncRes.json();
+    assert.equal(syncJson.ok, true);
+    assert.equal(syncJson.synced, 1);
+    assert.deepEqual(syncJson.systems, ['keskuskirkko']);
+
+    // 3. Traffic to /pi/keskuskirkko/canva/push routes to the discovered Pi upstream
+    const canvaRes = await fetch(`http://127.0.0.1:${relayPort}/pi/keskuskirkko/canva/push`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slides: [1] })
+    });
+    assert.equal(canvaRes.status, 200);
+    assert.equal(capturedUpstream.path, '/api/v1/canva/push');
+
+    // 4. Discovered venue data is accessible
+    const venueRes = await fetch(`http://127.0.0.1:${relayPort}/api/v1/systems/keskuskirkko/venue`);
+    assert.equal(venueRes.status, 200);
+    const venueJson = await venueRes.json();
+    assert.equal(venueJson.sanctuary, 'Main Church');
+  } finally {
+    await new Promise((r) => server.close(r));
+    await new Promise((r) => mockUpstream.close(r));
+    await new Promise((r) => mockDiscoveryServer.close(r));
   }
 });

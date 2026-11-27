@@ -363,8 +363,13 @@ app.options('*', (_req, res) => res.sendStatus(204));
 // ---------------------------------------------------------------------------
 // Reverse SSH Tunnel Proxy: Canva Application, PiControl & PiControl MCP
 // Mounted before body parsers and stream routing so large uploads and SSE pass through.
+// Supports pulling registered Pi systems and venue profiles from Tunnus Discovery API.
 // ---------------------------------------------------------------------------
 app.use(createTunnelRouter({
+  db,
+  relayApiToken: RELAY_API_TOKEN,
+  discoveryServiceUrl: process.env.DISCOVERY_SERVICE_URL || process.env.TUNNUS_DISCOVERY_URL,
+  discoveryToken: process.env.DISCOVERY_TOKEN || process.env.TUNNUS_TOKEN,
   canvaTunnelUrl: CANVA_TUNNEL_URL,
   picontrolTunnelUrl: PICONTROL_TUNNEL_URL,
   picontrolMcpTunnelUrl: PICONTROL_MCP_TUNNEL_URL

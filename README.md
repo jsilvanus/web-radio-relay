@@ -591,7 +591,10 @@ Copy `.env.example` to `.env` and override only what you need.
 | `PICONTROL_TUNNEL_URL` | *(unset)* | Upstream reverse SSH tunnel target for default Pi system PiControl operator UI & API (e.g. `http://host.docker.internal:3012`). Routes `/control/*`, `/picontrol/*`, `/ui/api/*` and passes through SSE events without buffering |
 | `PICONTROL_MCP_TUNNEL_URL` | *(unset)* | Upstream reverse SSH tunnel target for default Pi system PiControl MCP server (e.g. `http://host.docker.internal:3601`). Routes `/mcp`, `/mcp/*`, `/api/v1/mcp/*` with WebSocket / streamable HTTP SSE support |
 | `DEFAULT_PI_SYSTEM` | `keskuskirkko` | Identifier of the default Pi system for un-prefixed tunnel routes |
-| `PI_SYSTEMS` | *(unset)* | JSON map configuring multiple Pi systems with independent tunnel ports: `{"keskuskirkko":{"canva":"...:3010","picontrol":"...:3012","mcp":"...:3601"},"kappeli":{"canva":"...:3020","picontrol":"...:3022","mcp":"...:3602"}}`. Supports `/pi/:systemId/*`, `X-Pi-Target` header, or `?pi=` query parameter. Alternatively use convention env vars `PI_<NAME>_CANVA_TUNNEL_URL` etc. |
+| `DISCOVERY_SERVICE_URL` | *(unset)* | URL of central Tunnus service discovery (e.g. `https://tunnus.riihimaenseurakunta.fi/api/v1/discovery` or `http://tunnus:3000/api/v1/discovery`). When set, automatically pulls registered Pi edge instances, loop-bound tunnel ports, and venue profiles |
+| `DISCOVERY_TOKEN` | *(unset)* | Optional Bearer token for authenticating against the discovery service |
+| `DISCOVERY_POLL_INTERVAL_SECONDS` | `30` | Interval in seconds between automatic discovery pulls (0 = manual pull only via `POST /api/v1/discovery/sync`) |
+| `PI_SYSTEMS` | *(unset)* | JSON map configuring static Pi systems with independent tunnel ports: `{"keskuskirkko":{"canva":"...:3010","picontrol":"...:3012","mcp":"...:3601"},"kappeli":{"canva":"...:3020","picontrol":"...:3022","mcp":"...:3602"}}`. Supports `/pi/:systemId/*`, `X-Pi-Target` header, or `?pi=` query parameter. Alternatively use convention env vars `PI_<NAME>_CANVA_TUNNEL_URL` etc. |
 
 ### FFmpeg / on-publish.sh
 

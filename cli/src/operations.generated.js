@@ -723,5 +723,77 @@ export const operations = [
     "bearer": false,
     "body": null,
     "parameters": []
+  },
+  {
+    "operationId": "registerPiSystem",
+    "method": "POST",
+    "path": "/api/v1/tunnels/register",
+    "summary": "Self-register a Pi system with reverse SSH tunnel endpoints and venue information",
+    "bearer": true,
+    "body": "application/json",
+    "parameters": []
+  },
+  {
+    "operationId": "heartbeatPiSystem",
+    "method": "POST",
+    "path": "/api/v1/tunnels/heartbeat",
+    "summary": "Send heartbeat to refresh online status and last seen timestamp of a Pi system",
+    "bearer": true,
+    "body": "application/json",
+    "parameters": []
+  },
+  {
+    "operationId": "listPiSystems",
+    "method": "GET",
+    "path": "/api/v1/systems",
+    "summary": "List all registered Pi systems, online status, and venue summary",
+    "bearer": false,
+    "body": null,
+    "parameters": []
+  },
+  {
+    "operationId": "getPiSystem",
+    "method": "GET",
+    "path": "/api/v1/systems/{systemId}",
+    "summary": "Get details and complete venue information of a registered Pi system",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "systemId",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "deletePiSystem",
+    "method": "DELETE",
+    "path": "/api/v1/systems/{systemId}",
+    "summary": "Delete a registered Pi system",
+    "bearer": true,
+    "body": null,
+    "parameters": [
+      {
+        "name": "systemId",
+        "in": "path",
+        "required": true
+      }
+    ]
+  },
+  {
+    "operationId": "getPiSystemVenue",
+    "method": "GET",
+    "path": "/api/v1/systems/{systemId}/venue",
+    "summary": "Get raw venue profile of a registered Pi system",
+    "bearer": false,
+    "body": null,
+    "parameters": [
+      {
+        "name": "systemId",
+        "in": "path",
+        "required": true
+      }
+    ]
   }
 ];

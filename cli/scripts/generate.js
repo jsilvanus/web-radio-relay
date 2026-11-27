@@ -50,7 +50,7 @@ function render(ops) {
   ].join('\n');
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && fs.realpathSync(process.argv[1]).toLowerCase() === fs.realpathSync(fileURLToPath(import.meta.url)).toLowerCase()) {
   const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
   fs.writeFileSync(outPath, render(operationsFromSpec(spec)));
   console.log(`wrote ${path.relative(process.cwd(), outPath)}`);

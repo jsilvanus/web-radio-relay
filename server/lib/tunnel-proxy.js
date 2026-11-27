@@ -15,15 +15,27 @@ import http from 'node:http';
 import https from 'node:https';
 import { URL } from 'node:url';
 import express from 'express';
+import { bearerToken, tokensEqual } from './auth.js';
+import { findTokenByValue, isUsable, scopeAllows } from './tokens.js';
+import { mapDiscoveryToPiSystems, fetchDiscoveryCatalog } from './discovery-client.js';
 
 /**
- * Validates and normalizes a tunnel URL (must be http or https).
- * @param {string|undefined} value
+ * Validates and normalizes a tunnel URL (must be http or https, or port number).
+ * @param {string|number|undefined} value
  * @returns {string}
  */
 export function normalizeTunnelUrl(value) {
+  if (typeof value === 'number') {
+    return `http://host.docker.internal:${value}`;
+  }
   const text = String(value ?? '').trim().replace(/\/+$/, '');
   if (!text) return '';
+  if (/^\d+$/.test(text)) {
+    return `http://host.docker.internal:${text}`;
+  }
+  if (/^:\d+$/.test(text)) {
+    return `http://host.docker.internal${text}`;
+  }
   try {
     const parsed = new URL(text);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
@@ -236,6 +248,124 @@ export function proxyToTunnel(req, res, targetBaseUrl, options = {}) {
 }
 
 /**
+ * Loads registered Pi systems from SQLite store.
+ * @param {object} db
+ * @param {Map<string, object>} systemsMap
+ */
+export function loadStoredSystems(db, systemsMap) {
+  if (!db) return;
+  try {
+    const rows = db.prepare('SELECT * FROM pi_systems').all();
+    for (const row of rows) {
+      let venue = null;
+      if (row.venue_json) {
+        try { venue = JSON.parse(row.venue_json); } catch {}
+      }
+      systemsMap.set(row.id.toLowerCase(), {
+        id: row.id.toLowerCase(),
+        name: row.name || row.id,
+        canva: row.canva_url || '',
+        picontrol: row.picontrol_url || '',
+        mcp: row.mcp_url || '',
+        venue,
+        registeredAt: row.registered_at,
+        updatedAt: row.updated_at,
+        lastSeenAt: row.last_seen_at,
+        status: row.status || 'online'
+      });
+    }
+  } catch (err) {
+    console.warn('[tunnel-proxy] Failed to load stored pi_systems:', err.message);
+  }
+}
+
+/**
+ * Persists a registered Pi system into SQLite store.
+ * @param {object} db
+ * @param {object} system
+ */
+export function saveStoredSystem(db, system) {
+  if (!db) return;
+  try {
+    const venueJson = system.venue ? JSON.stringify(system.venue) : null;
+    db.prepare(`
+      INSERT INTO pi_systems (id, name, canva_url, picontrol_url, mcp_url, venue_json, registered_at, updated_at, last_seen_at, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (id) DO UPDATE SET
+        name = excluded.name,
+        canva_url = excluded.canva_url,
+        picontrol_url = excluded.picontrol_url,
+        mcp_url = excluded.mcp_url,
+        venue_json = excluded.venue_json,
+        updated_at = excluded.updated_at,
+        last_seen_at = excluded.last_seen_at,
+        status = excluded.status
+    `).run(
+      system.id,
+      system.name || system.id,
+      system.canva || '',
+      system.picontrol || '',
+      system.mcp || '',
+      venueJson,
+      system.registeredAt || Date.now(),
+      system.updatedAt || Date.now(),
+      system.lastSeenAt || Date.now(),
+      system.status || 'online'
+    );
+  } catch (err) {
+    console.warn('[tunnel-proxy] Failed to persist pi_system:', err.message);
+  }
+}
+
+/**
+ * Deletes a registered Pi system from SQLite store.
+ * @param {object} db
+ * @param {string} id
+ */
+export function deleteStoredSystem(db, id) {
+  if (!db) return;
+  try {
+    db.prepare('DELETE FROM pi_systems WHERE id = ?').run(id.toLowerCase());
+  } catch (err) {
+    console.warn('[tunnel-proxy] Failed to delete pi_system:', err.message);
+  }
+}
+
+/**
+ * Verifies Bearer authentication for tunnel registration and management.
+ * @param {import('express').Request} req
+ * @param {{ relayApiToken?: string, registrationToken?: string, db?: object }} options
+ * @returns {{ authorized: boolean, status?: number, error?: string, role?: string, token?: object }}
+ */
+export function verifyRegistrationAuth(req, { relayApiToken = '', registrationToken = '', db = null } = {}) {
+  const given = bearerToken(req.headers.authorization);
+  if (!given) return { authorized: false, status: 401, error: 'Unauthorized: Bearer token required' };
+
+  if (relayApiToken && tokensEqual(given, relayApiToken)) {
+    return { authorized: true, role: 'admin' };
+  }
+
+  if (registrationToken && tokensEqual(given, registrationToken)) {
+    return { authorized: true, role: 'registration' };
+  }
+
+  if (db) {
+    const row = findTokenByValue(db, given);
+    if (row && isUsable(row, Date.now())) {
+      if (scopeAllows(row.scopes, 'admin') || scopeAllows(row.scopes, 'system:register')) {
+        return { authorized: true, role: 'scoped', token: row };
+      }
+    }
+  }
+
+  if (!relayApiToken && !registrationToken && !db) {
+    return { authorized: false, status: 503, error: 'Tunnel registration is not configured: set RELAY_API_TOKEN' };
+  }
+
+  return { authorized: false, status: 401, error: 'Unauthorized: Invalid token' };
+}
+
+/**
  * Parses and normalizes configurations for multiple Pi systems.
  * Supports:
  *   1. Explicit options.systems or options.piSystems (object or JSON string)
@@ -355,8 +485,14 @@ export function resolveTargetSystem(req, systemsMap, defaultSystemId) {
  */
 export function createTunnelRouter(options = {}) {
   const router = express.Router();
+  const db = options.db || null;
   const { defaultSystemId, systems } = parsePiSystems(options);
   const timeoutMs = options.timeoutMs ?? 30000;
+
+  // Load any previously registered Pi systems from SQLite persistence
+  if (db) {
+    loadStoredSystems(db, systems);
+  }
 
   // Support subpath staging prefix (e.g. /relay or /media) if not already stripped upstream
   router.use((req, _res, next) => {
@@ -370,6 +506,311 @@ export function createTunnelRouter(options = {}) {
       req.url = '/';
     }
     next();
+  });
+
+  const getAuthOptions = () => ({
+    relayApiToken: options.relayApiToken ?? process.env.RELAY_API_TOKEN,
+    registrationToken: options.registrationToken ?? process.env.TUNNEL_REGISTRATION_TOKEN,
+    db
+  });
+
+  // ---------------------------------------------------------------------------
+  // Tunnus / OIDC Discovery Pull Service
+  // Pulls registered Pi systems, venue profiles, and loop-bound SSH tunnel ports
+  // from central Tunnus service discovery (/api/v1/discovery).
+  // ---------------------------------------------------------------------------
+  const discoveryUrl = options.discoveryServiceUrl ?? process.env.DISCOVERY_SERVICE_URL ?? process.env.TUNNUS_DISCOVERY_URL ?? '';
+  const discoveryToken = options.discoveryToken ?? process.env.DISCOVERY_TOKEN ?? process.env.TUNNUS_TOKEN ?? '';
+  const pollIntervalSeconds = Number(options.discoveryPollIntervalSeconds ?? process.env.DISCOVERY_POLL_INTERVAL_SECONDS ?? 30);
+
+  let lastDiscoverySyncAt = null;
+  let lastDiscoveryError = null;
+
+  async function syncFromDiscovery() {
+    if (!discoveryUrl) return { ok: false, error: 'DISCOVERY_SERVICE_URL is not configured' };
+    try {
+      const catalog = await fetchDiscoveryCatalog({
+        discoveryUrl,
+        token: discoveryToken,
+        fetchImpl: options.fetchImpl || fetch,
+        timeoutMs: options.discoveryTimeoutMs || 10000
+      });
+      const discovered = mapDiscoveryToPiSystems(catalog);
+      let count = 0;
+      for (const [id, sys] of discovered.entries()) {
+        const existing = systems.get(id);
+        const updated = {
+          id,
+          name: sys.name || (existing ? existing.name : id),
+          canva: sys.canva || (existing ? existing.canva : ''),
+          picontrol: sys.picontrol || (existing ? existing.picontrol : ''),
+          mcp: sys.mcp || (existing ? existing.mcp : ''),
+          venue: sys.venue !== null ? sys.venue : (existing ? existing.venue : null),
+          metadata: { ...(existing?.metadata || {}), ...(sys.metadata || {}) },
+          registeredAt: existing?.registeredAt || Date.now(),
+          updatedAt: Date.now(),
+          lastSeenAt: Date.now(),
+          status: 'online',
+          source: 'discovery'
+        };
+        systems.set(id, updated);
+        if (db) saveStoredSystem(db, updated);
+        count++;
+      }
+      lastDiscoverySyncAt = Date.now();
+      lastDiscoveryError = null;
+      return { ok: true, synced: count, systems: Array.from(discovered.keys()), updatedAt: lastDiscoverySyncAt };
+    } catch (err) {
+      lastDiscoveryError = err.message;
+      console.warn(`[discovery] Failed to pull discovery catalog from ${discoveryUrl}:`, err.message);
+      return { ok: false, error: err.message };
+    }
+  }
+
+  if (discoveryUrl) {
+    syncFromDiscovery().catch(() => {});
+    if (pollIntervalSeconds > 0) {
+      const timer = setInterval(() => {
+        syncFromDiscovery().catch(() => {});
+      }, pollIntervalSeconds * 1000);
+      timer.unref?.();
+    }
+  }
+
+  // Discovery status endpoint
+  router.get(['/api/v1/discovery/status', '/api/v1/tunnels/discovery'], (_req, res) => {
+    res.json({
+      configured: Boolean(discoveryUrl),
+      discoveryUrl: discoveryUrl || null,
+      pollIntervalSeconds,
+      lastSyncAt: lastDiscoverySyncAt,
+      lastError: lastDiscoveryError,
+      totalSystems: systems.size
+    });
+  });
+
+  // Manually trigger a pull from the discovery service
+  router.post(['/api/v1/discovery/sync', '/api/v1/tunnels/sync'], async (_req, res) => {
+    const result = await syncFromDiscovery();
+    res.status(result.ok ? 200 : 502).json(result);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Pi Self-Registration & Lifecycle Endpoints
+  // ---------------------------------------------------------------------------
+
+  // Self-register a Pi system with its tunnel targets and venue information
+  router.post(['/api/v1/tunnels/register', '/api/v1/systems/register'], express.json(), (req, res) => {
+    const authCheck = verifyRegistrationAuth(req, getAuthOptions());
+    if (!authCheck.authorized) {
+      if (authCheck.status === 401) res.set('WWW-Authenticate', 'Bearer');
+      res.status(authCheck.status || 401).json({ error: authCheck.error });
+      return;
+    }
+
+    const body = req.body || {};
+    const id = String(body.id || body.systemId || '').trim().toLowerCase();
+    if (!id || !/^[a-z0-9_-]{1,64}$/.test(id)) {
+      res.status(400).json({
+        error: 'Invalid or missing system id (must be 1-64 alphanumeric chars, underscores or hyphens)',
+        code: 'INVALID_SYSTEM_ID'
+      });
+      return;
+    }
+
+    const tunnels = body.tunnels || body.ports || {};
+    const canvaUrl = normalizeTunnelUrl(body.canva || body.canvaTunnelUrl || tunnels.canva || tunnels.canvaPort);
+    const picontrolUrl = normalizeTunnelUrl(body.picontrol || body.picontrolTunnelUrl || tunnels.picontrol || tunnels.picontrolPort);
+    const mcpUrl = normalizeTunnelUrl(body.mcp || body.picontrolMcpTunnelUrl || tunnels.mcp || tunnels.mcpPort);
+
+    const now = Date.now();
+    const existing = systems.get(id);
+
+    const systemRecord = {
+      id,
+      name: String(body.name || (existing ? existing.name : id)).slice(0, 120),
+      canva: canvaUrl || (existing ? existing.canva : ''),
+      picontrol: picontrolUrl || (existing ? existing.picontrol : ''),
+      mcp: mcpUrl || (existing ? existing.mcp : ''),
+      venue: body.venue !== undefined ? body.venue : (existing ? existing.venue : null),
+      metadata: body.metadata !== undefined ? body.metadata : (existing ? existing.metadata : null),
+      registeredAt: existing?.registeredAt || now,
+      updatedAt: now,
+      lastSeenAt: now,
+      status: 'online'
+    };
+
+    systems.set(id, systemRecord);
+    if (db) saveStoredSystem(db, systemRecord);
+
+    const isNew = !existing || !existing.registeredAt;
+    res.status(isNew ? 201 : 200).json({
+      ok: true,
+      registered: true,
+      system: {
+        id,
+        name: systemRecord.name,
+        status: systemRecord.status,
+        tunnels: {
+          canva: systemRecord.canva || null,
+          picontrol: systemRecord.picontrol || null,
+          mcp: systemRecord.mcp || null
+        },
+        routes: {
+          canva: `/pi/${id}/canva`,
+          canvaApi: `/pi/${id}/api/v1/canva`,
+          picontrol: `/pi/${id}/control`,
+          mcp: `/pi/${id}/mcp`
+        },
+        venue: systemRecord.venue,
+        registeredAt: systemRecord.registeredAt,
+        updatedAt: systemRecord.updatedAt,
+        lastSeenAt: systemRecord.lastSeenAt
+      }
+    });
+  });
+
+  // Heartbeat to keep status 'online' and update lastSeenAt
+  router.post(['/api/v1/tunnels/heartbeat', '/api/v1/systems/:systemId/heartbeat'], express.json(), (req, res) => {
+    const authCheck = verifyRegistrationAuth(req, getAuthOptions());
+    if (!authCheck.authorized) {
+      if (authCheck.status === 401) res.set('WWW-Authenticate', 'Bearer');
+      res.status(authCheck.status || 401).json({ error: authCheck.error });
+      return;
+    }
+
+    const id = String(req.params.systemId || req.body?.id || req.body?.systemId || '').trim().toLowerCase();
+    const system = systems.get(id);
+    if (!system) {
+      res.status(404).json({ error: `Pi system '${id}' not found`, code: 'SYSTEM_NOT_FOUND' });
+      return;
+    }
+
+    const now = Date.now();
+    system.lastSeenAt = now;
+    system.status = 'online';
+    if (req.body?.venue) system.venue = req.body.venue;
+    if (req.body?.metadata) system.metadata = req.body.metadata;
+    system.updatedAt = now;
+
+    if (db) saveStoredSystem(db, system);
+
+    res.json({ ok: true, id, status: 'online', lastSeenAt: now });
+  });
+
+  // Unregister / mark offline
+  router.post('/api/v1/tunnels/unregister', express.json(), (req, res) => {
+    const authCheck = verifyRegistrationAuth(req, getAuthOptions());
+    if (!authCheck.authorized) {
+      if (authCheck.status === 401) res.set('WWW-Authenticate', 'Bearer');
+      res.status(authCheck.status || 401).json({ error: authCheck.error });
+      return;
+    }
+
+    const id = String(req.body?.id || req.body?.systemId || '').trim().toLowerCase();
+    const system = systems.get(id);
+    if (!system) {
+      res.status(404).json({ error: `Pi system '${id}' not found`, code: 'SYSTEM_NOT_FOUND' });
+      return;
+    }
+
+    system.status = 'offline';
+    system.updatedAt = Date.now();
+    if (db) saveStoredSystem(db, system);
+
+    res.json({ ok: true, unregistered: true, id, status: 'offline' });
+  });
+
+  // Delete / purge a system registration
+  router.delete(['/api/v1/systems/:systemId', '/api/v1/tunnels/register/:systemId'], (req, res) => {
+    const authCheck = verifyRegistrationAuth(req, getAuthOptions());
+    if (!authCheck.authorized) {
+      if (authCheck.status === 401) res.set('WWW-Authenticate', 'Bearer');
+      res.status(authCheck.status || 401).json({ error: authCheck.error });
+      return;
+    }
+
+    const id = req.params.systemId.toLowerCase();
+    if (!systems.has(id)) {
+      res.status(404).json({ error: `Pi system '${id}' not found`, code: 'SYSTEM_NOT_FOUND' });
+      return;
+    }
+
+    systems.delete(id);
+    if (db) deleteStoredSystem(db, id);
+
+    res.json({ ok: true, deleted: true, id });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Systems & Venue Query Endpoints
+  // ---------------------------------------------------------------------------
+
+  // List all registered systems with venue summary
+  router.get('/api/v1/systems', (_req, res) => {
+    const result = [];
+    for (const [id, s] of systems.entries()) {
+      result.push({
+        id,
+        name: s.name || id,
+        status: s.status || 'online',
+        tunnels: {
+          canva: s.canva || null,
+          picontrol: s.picontrol || null,
+          mcp: s.mcp || null
+        },
+        hasVenue: Boolean(s.venue),
+        venueSummary: s.venue?.profile || s.venue?.name || (typeof s.venue === 'string' ? s.venue : null),
+        registeredAt: s.registeredAt || null,
+        lastSeenAt: s.lastSeenAt || null
+      });
+    }
+    res.json({ systems: result, defaultSystem: defaultSystemId, total: result.length });
+  });
+
+  // Get specific system with complete venue information
+  router.get('/api/v1/systems/:systemId', (req, res) => {
+    const id = req.params.systemId.toLowerCase();
+    const s = systems.get(id);
+    if (!s) {
+      res.status(404).json({ error: `Pi system '${id}' not found`, code: 'SYSTEM_NOT_FOUND' });
+      return;
+    }
+    res.json({
+      id,
+      name: s.name || id,
+      status: s.status || 'online',
+      tunnels: {
+        canva: s.canva || null,
+        picontrol: s.picontrol || null,
+        mcp: s.mcp || null
+      },
+      routes: {
+        canva: `/pi/${id}/canva`,
+        picontrol: `/pi/${id}/control`,
+        mcp: `/pi/${id}/mcp`
+      },
+      venue: s.venue || null,
+      metadata: s.metadata || null,
+      registeredAt: s.registeredAt || null,
+      updatedAt: s.updatedAt || null,
+      lastSeenAt: s.lastSeenAt || null
+    });
+  });
+
+  // Get raw venue information of a system
+  router.get('/api/v1/systems/:systemId/venue', (req, res) => {
+    const id = req.params.systemId.toLowerCase();
+    const s = systems.get(id);
+    if (!s) {
+      res.status(404).json({ error: `Pi system '${id}' not found`, code: 'SYSTEM_NOT_FOUND' });
+      return;
+    }
+    if (!s.venue) {
+      res.status(404).json({ error: `No venue information registered for Pi system '${id}'`, code: 'NO_VENUE_INFO' });
+      return;
+    }
+    res.json(s.venue);
   });
 
   const buildStatusResponse = (systemFilter = null) => {

@@ -65,6 +65,20 @@ export const MIGRATIONS = [
   `
   ALTER TABLE tokens ADD COLUMN label TEXT;
   `,
+  `
+  CREATE TABLE pi_systems (
+    id            TEXT PRIMARY KEY,
+    name          TEXT,
+    canva_url     TEXT,
+    picontrol_url TEXT,
+    mcp_url       TEXT,
+    venue_json    TEXT,
+    registered_at INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL,
+    last_seen_at  INTEGER NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'online'
+  );
+  `,
 ];
 
 // Applies every migration above the stored schema version. Throws (after a
