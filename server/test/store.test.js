@@ -191,7 +191,7 @@ test('resolveDatabaseTarget detects postgres and sqlite configs', () => {
     type: 'postgres',
     host: 'pg.shared.local',
     port: 5432,
-    database: 'media_relay_prod',
+    database: 'media_relay_db',
     user: 'media_relay_user',
     password: 'secretpassword',
   });
